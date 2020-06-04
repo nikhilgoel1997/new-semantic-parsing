@@ -1,0 +1,1 @@
+from .encoder_decoder_pointer_model import EncoderDecoderWPointerModel
