@@ -33,13 +33,18 @@ class EncoderDecoderWPointerModel(transformers.EncoderDecoderModel):
         assert encoder.config.hidden_size == decoder.config.hidden_size
         super().__init__(encoder=encoder, decoder=decoder, **kwargs)
 
+        head_config = deepcopy(decoder.config)
+        # TODO: we have two types of padding - encoder and decoder output padding, it would be nice to combine them
+        # this gives a schema vocab size
+        head_config.vocab_size = decoder.config.vocab_size - encoder.config.vocab_size
         # Linear -> activation -> Linear -> LayerNorm
         # from config only .hidden_size, .hidden_act, .layer_norm_eps and .vocab_size are used
-        self.lm_head = transformers.modeling_bert.BertLMPredictionHead(decoder.config)
+        self.lm_head = transformers.modeling_bert.BertLMPredictionHead(head_config)
 
-        # lm_head.decoder is just a linear layer
-        self._tie_or_clone_weights(self.lm_head.decoder,
-                                   self.decoder.get_input_embeddings())
+        # One does not simply ties weights of embeddings with different vocabularies
+        # # lm_head.decoder is just a linear layer
+        # self._tie_or_clone_weights(self.lm_head.decoder,
+        #                            self.decoder.get_input_embeddings())
 
         self.decoder_q_proj = nn.Linear(self.decoder.config.hidden_size,
                                         self.encoder.config.hidden_size,
