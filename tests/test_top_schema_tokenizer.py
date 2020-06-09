@@ -85,7 +85,7 @@ class TopSchemaTokenizerTest(unittest.TestCase):
         schema_str = '[IN:INTENT1 tok6,tok2 tok31 [SL:SLOT1 tok42 tok5 ] ]'
         source_tokens = [TransformersTokenizerMock.cls_token_id, 6, 2, 31, 42, 5]
         # note that TransformersTokenizerMock splits tok6,tok2 into two subtokens
-        expected_ids = [1, 3, 4, 7, 8, 9, 1, 5, 6, 10, 11, 2, 2]
+        expected_ids = [1, 3, 4, 8, 9, 10, 1, 5, 6, 11, 12, 2, 2]
 
         res = tokenizer.encode(schema_str, source_tokens)
 

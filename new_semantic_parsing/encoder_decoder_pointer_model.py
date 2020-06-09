@@ -16,6 +16,8 @@ from copy import deepcopy
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
 import transformers
 
 from transformers import PreTrainedModel, BertModel
@@ -37,7 +39,7 @@ class EncoderDecoderWPointerModel(transformers.EncoderDecoderModel):
         # TODO: we have two types of padding - encoder and decoder output padding, it would be nice to combine them
         # this gives a schema vocab size
         head_config.vocab_size = decoder.config.vocab_size - encoder.config.vocab_size
-        # Linear -> activation -> Linear -> LayerNorm
+        # Linear -> activation -> LayerNorm -> Linear
         # from config only .hidden_size, .hidden_act, .layer_norm_eps and .vocab_size are used
         self.lm_head = transformers.modeling_bert.BertLMPredictionHead(head_config)
 
@@ -50,6 +52,36 @@ class EncoderDecoderWPointerModel(transformers.EncoderDecoderModel):
                                         self.encoder.config.hidden_size,
                                         bias=False)
 
+    @classmethod
+    def from_parameters(
+        cls,
+        layers,
+        hidden,
+        heads,
+        src_vocab_size,
+        tgt_vocab_size,
+    ):
+        encoder_config = transformers.BertConfig(
+            hidden_size=hidden,
+            intermediate_size=4 * hidden,
+            vocab_size=src_vocab_size,
+            num_hidden_layers=layers,
+            num_attention_heads=heads,
+        )
+        encoder = transformers.BertModel(encoder_config)
+
+        decoder_config = transformers.BertConfig(
+            hidden_size=hidden,
+            intermediate_size=4 * hidden,
+            vocab_size=tgt_vocab_size + src_vocab_size,
+            is_decoder=True,
+            num_hidden_layers=layers,
+            num_attention_heads=heads,
+        )
+        decoder = transformers.BertModel(decoder_config)
+
+        return cls(encoder, decoder)
+
     def forward(
         self,
         input_ids=None,
@@ -61,11 +93,33 @@ class EncoderDecoderWPointerModel(transformers.EncoderDecoderModel):
         decoder_attention_mask=None,
         decoder_head_mask=None,
         decoder_inputs_embeds=None,
-        masked_lm_labels=None,
+        pointer_attention_mask=None,
         lm_labels=None,
         **kwargs,
     ):
+        """
+        Note that all masks are FloatTensors and equal 1 for keep and 0 for mask
 
+        :param input_ids: LongTensor of shape (batch_size, src_seq_len)
+        :param inputs_embeds: alternative to input_ids, shape (batch_size, src_seq_len, embed_dim)
+        :param attention_mask: FloatTensor of shape (batch_size, src_seq_len), padding mask for the encoder
+        :param head_mask: FloatTensor of shape (num_heads,) or (num_layers, num_heads)
+        :param encoder_outputs: alternative to input_ids, tuple(last_hidden_state, hidden_states, attentions)
+            last_hidden_state has shape (batch_size, src_seq_len, hidden)
+        :param decoder_input_ids: LongTensor of shape (batch_size, tgt_seq_len)
+        :param decoder_inputs_embeds: alternative to decoder_input_ids, shape (batch_size, tgt_seq_len, embed_dim
+        :param decoder_attention_mask: FloatTensor of shape (batch_size, tgt_seq_lqn), padding mask for the encoder
+            decoder input padding mask, causal mask is generated inside the decoder class
+        :param decoder_head_mask: FloatTensor of shape (num_heads,) or (num_layers, num_heads)
+        :param pointer_attention_mask: FloatTensor of shape (batch_size, src_seq_len), padding mask for the pointer
+        :param lm_labels: LongTensor of shape (batch_size, tgt_seq_len), typically equal decoder_input_ids
+        :param kwargs:
+        :return:
+            tuple of
+                combined_logits tensor of shape (batch_size, tgt_seq_len, tgt_vocab_size + src_vocab_size),
+                decoder outputs,
+                encoder outputs,
+        """
         kwargs_encoder = {argument: value for argument, value in kwargs.items() if not argument.startswith("decoder_")}
 
         kwargs_decoder = {
@@ -104,8 +158,42 @@ class EncoderDecoderWPointerModel(transformers.EncoderDecoderModel):
 
         attention_scores = query @ keys.transpose(1, 2)  # (bs, tgt_len, src_len)
 
-        # maybe add some kind of normalization between dec_logits?
+        # mask becomes 0 for all 1 (keep) positions and -1e4 in all 0 (mask) positions
+        pointer_attention_mask = self._get_pointer_attention_mask(
+            pointer_attention_mask, attention_scores.shape,
+        )
+        attention_scores = attention_scores + pointer_attention_mask
+
+        # NOTE: maybe add some kind of normalization between dec_logits?
         decoder_logits = self.lm_head(decoder_hidden_states)  # (bs, tgt_len, tgt_vocab_size)
         combined_logits = torch.cat([decoder_logits, attention_scores], dim=-1)
 
-        return (combined_logits,) + decoder_outputs + encoder_outputs
+        if lm_labels is None:
+            return (combined_logits,) + decoder_outputs + encoder_outputs
+
+        loss = F.cross_entropy(
+            combined_logits.view(-1, combined_logits.shape[-1]),
+            lm_labels.view(-1)
+        )
+        return (loss, combined_logits) + decoder_outputs + encoder_outputs
+
+    def _get_pointer_attention_mask(self, pointer_attention_mask=None, shape=None, device=None, dtype=None):
+        """
+        :param pointer_attention_mask: FloatTensor of shape (batch_size, src_seq_len), padding mask for the pointer
+            0 for masking and 1 for no masking
+        :param shape: alternative to pointer_attention_mask, tuple (batch_size, src_seq_len, tgt_seq_len)
+        :param device: torch.device
+        :return: FloatTensor of shape (batch_size, 1, src_seq_len)
+            attention mask which equals -1e4 for src padding and special tokens and zero otherwise
+        """
+        device = device or self.device
+        dtype = dtype or self.dtype
+
+        if pointer_attention_mask is None:
+            bs, _, src_len = shape
+            return torch.zeros([bs, 1, src_len], device=device, dtype=dtype)
+
+        # We use -1e4 for masking analogous to Transformers library
+        # ideally, this number should depend on dtype and should be
+        # bigger for float32 and smaller for float16 and bfloat16
+        return ((1. - pointer_attention_mask) * -1e4).unsqueeze(1)

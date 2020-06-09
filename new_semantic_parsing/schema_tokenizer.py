@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # =============================================================================
+import torch
+import numpy as np
 
 
 class TopSchemaTokenizer:
@@ -36,6 +38,8 @@ class TopSchemaTokenizer:
         self._itos = [self.pad_token] + list(schema_vocab)
         self._stoi = {s: i for i, s in enumerate(self._itos)}
 
+        self.pad_token_id = self._stoi[self.pad_token]
+
         self._src_tokenizer = src_text_tokenizer
 
     @property
@@ -57,12 +61,61 @@ class TopSchemaTokenizer:
 
         return ids
 
+    def batch_encode_plus(
+        self,
+        batch_schema_text,
+        batch_source_ids,
+        max_length=None,
+        pad_to_max_length=True,
+        return_tensors=None,
+        device='cpu',
+    ):
+        assert pad_to_max_length, "Not padding to max length is not supported"
+
+        batch_size = len(batch_schema_text)
+        batch_ids = []
+
+        for schema_text, source_ids in zip(batch_schema_text, batch_source_ids):
+            ids = self.encode(schema_text, source_ids, max_length)
+            batch_ids.append(ids)
+
+        if max_length is None:
+            max_length = max(len(t) for t in batch_ids)
+
+        batch_ids_padded = np.ones([batch_size, max_length]) * self.pad_token_id
+        padding_masks = np.ones([batch_size, max_length])
+        for j, ids in enumerate(batch_ids):
+            difference = max_length - len(ids)
+            if difference > 0:
+                ids = ids + [self.pad_token_id] * difference
+                padding_masks[j, -difference:] = 0.
+
+            if difference < 0:
+                ids = ids[:max_length]
+
+            batch_ids_padded[j] = ids
+
+        if return_tensors is None:
+            return {'input_ids': batch_ids_padded, 'attention_mask': padding_masks}
+
+        if return_tensors == 'pt':
+            return {'input_ids': torch.LongTensor(batch_ids_padded, device=device),
+                    'attention_mask': torch.FloatTensor(padding_masks, device=device)}
+
+        raise ValueError('`return_tensors` can be eigher None or "pt"')
+
     def convert_tokens_to_ids(self, schema_tokens, src_token_ids):
+        """
+        :param schema_tokens: string
+        :param src_token_ids: list or numpy array of integers
+        :return: list of integers - a mix of token ids and position ids
+            position id = position + vocab_size
+        """
         schema_ids = []
         # points to a first token corresponding to a word
         has_cls = (
-            self._src_tokenizer.cls_token is not None
-            and src_token_ids[0] == self._src_tokenizer.cls_token_id
+            self._src_tokenizer.cls_token is not None and
+            self._src_tokenizer.cls_token_id in src_token_ids
         )
         src_tokens_pointer = int(has_cls)
 
@@ -75,7 +128,7 @@ class TopSchemaTokenizer:
 
             for subtoken in subtokens:
                 assert subtoken == src_token_ids[src_tokens_pointer]
-                schema_ids.append(self.vocab_size + src_tokens_pointer - int(has_cls))
+                schema_ids.append(self.vocab_size + src_tokens_pointer)
                 src_tokens_pointer += 1
 
         return schema_ids
