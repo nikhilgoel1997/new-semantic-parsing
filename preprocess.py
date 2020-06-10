@@ -24,16 +24,15 @@ import torch
 import pandas as pd
 
 import transformers
-import tokenizers
 
 from tqdm import tqdm
 
 from new_semantic_parsing import TopSchemaTokenizer
-from new_semantic_parsing.utils import get_vocab_top_schema
-from new_semantic_parsing.utils import PointerDataset, set_seed
+from new_semantic_parsing import utils
+from new_semantic_parsing.utils import PointerDataset
 
 
-SAVE_FORMAT_VERSION = '0.1-nightly-Jun10'
+SAVE_FORMAT_VERSION = '0.1-nightly-Jun11'
 
 
 logging.basicConfig(
@@ -42,7 +41,7 @@ logging.basicConfig(
     level=logging.INFO,
     stream=sys.stdout,
 )
-logger = logging.getLogger('train')
+logger = logging.getLogger('preprocess.py')
 
 
 def parse_args(args=None):
@@ -83,7 +82,7 @@ def make_dataset(filepath, text_tokenizer, schema_tokenizer):
 if __name__ == '__main__':
     args = parse_args()
 
-    set_seed(args.seed)
+    utils.set_seed(args.seed)
 
     save_dir = Path(args.save_dir)
 
@@ -95,11 +94,11 @@ if __name__ == '__main__':
     train_data = pd.read_table(Path(args.data)/'train.tsv', names=['text', 'tokens', 'schema'])
 
     logger.info('Getting schema vocabulary')
-    schema_vocab = reduce(set.union, map(get_vocab_top_schema, train_data.schema))
+    schema_vocab = reduce(set.union, map(utils.get_vocab_top_schema, train_data.schema))
     logger.info(f'Schema vocabulary size: {len(schema_vocab)}')
 
     logger.info('Building tokenizers')
-    text_tokenizer = transformers.AutoTokenizer.from_pretrained(args.text_tokenizer)
+    text_tokenizer = transformers.AutoTokenizer.from_pretrained(args.text_tokenizer, use_fast=True)
     schema_tokenizer = TopSchemaTokenizer(schema_vocab, text_tokenizer)
 
     logger.info('Tokenizing train dataset')
@@ -118,7 +117,11 @@ if __name__ == '__main__':
         toml.dump(args_dict, f)
 
     # text tokenizer is saved along with schema_tokenizer
-    schema_tokenizer.save(save_dir/'tokenizer')
+    model_type = None
+    if not Path(args.text_tokenizer).exists():
+        model_type = utils.get_model_type(args.text_tokenizer)
+
+    schema_tokenizer.save((save_dir/'tokenizer').as_posix(), encoder_model_type=model_type)
 
     data_state = {
         'train_dataset': train_dataset,

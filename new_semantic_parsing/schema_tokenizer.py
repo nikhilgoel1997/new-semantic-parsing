@@ -13,6 +13,7 @@
 # limitations under the License.
 # =============================================================================
 import os
+import json
 from pathlib import Path
 
 import torch
@@ -46,7 +47,7 @@ class TopSchemaTokenizer:
 
         self.pad_token_id = self._stoi[self.pad_token]
 
-        self._src_tokenizer = src_text_tokenizer
+        self.src_tokenizer = src_text_tokenizer
 
     @property
     def vocab_size(self):
@@ -115,14 +116,14 @@ class TopSchemaTokenizer:
             return InputDataClass(
                 input_ids=batch_ids_padded,
                 attention_mask=padding_masks,
-                target_pointer_mask=batch_schema_masks,
+                decoder_pointer_mask=batch_schema_masks,
             )
 
         if return_tensors == 'pt':
             return InputDataClass(
                 input_ids=torch.LongTensor(batch_ids_padded, device=device),
                 attention_mask=torch.FloatTensor(padding_masks, device=device),
-                target_pointer_mask=torch.FloatTensor(batch_schema_masks, device=device),
+                decoder_pointer_mask=torch.FloatTensor(batch_schema_masks, device=device),
             )
 
         raise ValueError('`return_tensors` can be eigher None or "pt"')
@@ -139,8 +140,8 @@ class TopSchemaTokenizer:
 
         # points to a first token corresponding to a word
         has_cls = (
-            self._src_tokenizer.cls_token is not None and
-            self._src_tokenizer.cls_token_id in src_token_ids
+            self.src_tokenizer.cls_token is not None and
+            self.src_tokenizer.cls_token_id in src_token_ids
         )
         src_tokens_pointer = int(has_cls)
 
@@ -155,7 +156,7 @@ class TopSchemaTokenizer:
                 schema_ids.append(self._stoi[token])
                 continue
 
-            subtokens = self._src_tokenizer.encode(token, add_special_tokens=False)
+            subtokens = self.src_tokenizer.encode(token, add_special_tokens=False)
 
             for subtoken in subtokens:
                 assert subtoken == src_token_ids[src_tokens_pointer]
@@ -165,17 +166,27 @@ class TopSchemaTokenizer:
 
         return SchemaItem(schema_ids, pointer_mask)
 
-    def save(self, path):
-        path = Path(path)
-        os.makedirs(path)
+    def save(self, path, encoder_model_type=None):
+        """
+        Save schema tokenizer and text tokenizer
+        Optionally, save pre-trained encoder model type - this is a workaround for Transformers #4197
+        """
+        _path = Path(path)
+        os.makedirs(_path)
 
-        with open(path/'schema_vocab.txt', 'w') as f:
+        with open(_path / 'schema_vocab.txt', 'w') as f:
             f.write('\n'.join(self._vocab))
 
-        self._src_tokenizer.save_pretrained(path)
+        self.src_tokenizer.save_pretrained(path)
+
+        if encoder_model_type is not None:
+            with open(_path / 'config.json', 'w') as f:
+                json.dump({'model_type': encoder_model_type}, f)
 
     @classmethod
-    def load(cls, path):
+    def load(cls, path: str):
+        if isinstance(path, Path):
+            raise ValueError('AutoTokenizer.from_pretrained does not support Path')
         with open(Path(path)/'schema_vocab.txt') as f:
             schema_vocab = set(f.read().strip('\n').split('\n'))
 

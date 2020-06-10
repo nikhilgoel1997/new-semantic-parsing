@@ -15,7 +15,7 @@ class InputDataClass:
     input_ids: LongTensor
     decoder_input_ids: LongTensor = None
     attention_mask: FloatTensor = None
-    target_pointer_mask: FloatTensor = None
+    decoder_pointer_mask: FloatTensor = None
     decoder_attention_mask: FloatTensor = None
     labels: LongTensor = None
 
