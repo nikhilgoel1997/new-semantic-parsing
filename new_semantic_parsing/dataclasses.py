@@ -5,6 +5,7 @@ import numpy as np
 import torch
 
 
+Tensor = NewType('Tensor', Union[List, np.ndarray, torch.Tensor])
 LongTensor = NewType('LongTensor', Union[List, np.ndarray, torch.LongTensor])
 FloatTensor = NewType('FloatTensor', Union[List, np.ndarray, torch.FloatTensor])
 

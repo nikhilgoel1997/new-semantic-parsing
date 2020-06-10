@@ -12,10 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # =============================================================================
-
+import random
 import unittest
-from new_semantic_parsing import utils
+import torch
 
+from new_semantic_parsing import utils
+from new_semantic_parsing.dataclasses import InputDataClass
 
 class TopSchemaGetVocabularyTest(unittest.TestCase):
     def test_get_vocab(self):
@@ -38,3 +40,22 @@ class TopSchemaGetVocabularyTest(unittest.TestCase):
 
         res = utils.get_vocab_top_schema(schema_str)
         self.assertSetEqual(res, schema_voc)
+
+
+class PointerDatasetTest(unittest.TestCase):
+    def test_getitem(self):
+        torch.manual_seed(29)
+        random.seed(29)
+
+        src_tensors = [torch.randint(0, 100, size=(random.randint(5, 13),), dtype=torch.int64)
+                       for _ in range(10)]
+        tgt_tensors = [torch.randint(0, 200, size=(random.randint(5, 13),), dtype=torch.int64)
+                       for _ in range(10)]
+
+        dataset = utils.PointerDataset(src_tensors, tgt_tensors)
+
+        item = dataset[0]
+
+        self.assertIsInstance(item, InputDataClass)
+        self.assertIsInstance(item.input_ids, torch.LongTensor)
+        self.assertIsInstance(item.decoder_input_ids, torch.LongTensor)
