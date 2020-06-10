@@ -37,9 +37,9 @@ class PointerDataset(torch.utils.data.Dataset):
             self.torchified = self.torchified and isinstance(target_pointer_masks[0], torch.Tensor)
 
     def __len__(self):
-        return len(self.source_tensors_dict)
+        return len(self.source_tensors)
 
-    def __getitem__(self, item):
+    def __getitem__(self, item) -> InputDataClass:
         if self.target_tensors is None:
             return InputDataClass(
                 input_ids=self.source_tensors[item],
@@ -52,7 +52,7 @@ class PointerDataset(torch.utils.data.Dataset):
         return InputDataClass(
             input_ids=self.source_tensors[item],
             decoder_input_ids=self.target_tensors[item],
-            target_pointer_mask=target_pointer_mask,
+            decoder_pointer_mask=target_pointer_mask,
         )
 
     def torchify(self):
@@ -60,7 +60,7 @@ class PointerDataset(torch.utils.data.Dataset):
             return
 
         self.source_tensors = [torch.LongTensor(t) for t in self.source_tensors]
-        self.target_tensors = [torch.LongTensor(t) for t in self.source_tensors]
+        self.target_tensors = [torch.LongTensor(t) for t in self.target_tensors]
         if self.target_pointer_masks is not None:
             self.target_pointer_masks = [torch.FloatTensor(t) for t in self.target_pointer_masks]
 
@@ -85,20 +85,62 @@ class Seq2SeqDataCollator(transformers.DataCollator):
     Length is different for encoder and decoder inputs.
 
     Decoder inputs should have prefix `decoder_`
-    Encoder inputs do not have prefix
-    """
-    def collate_batch(self, examples):
-        batch = dict()
+    `labels` considered a decoder field too
+    All other tensors considered encoder inputs
 
+    All values in the input DataClasses should be torch.Tensor or shape (seq_len, *)
+    or None, None values are ignored
+
+    All values corresponsing to the keys ending with `mask` are padded with zeroes
+    """
+    def __init__(self, pad_id, decoder_pad_id=None):
+        self.encoder_pad_id = pad_id
+        self.decoder_pad_id = decoder_pad_id or pad_id
+
+        self._encoder_max_len = None
+        self._decoder_max_len = None
+
+    def collate_batch(self, examples):
+        """
+        :param examples: list of DataClass
+        :return: dict with the DataClass fields
+        """
+        batch = dict()
+        batch_size = len(examples)
+
+        # iterate ofer the first example to get shapes
         for k, v in vars(examples[0]).items():
             if v is None:
                 continue
-            batch[k] = torch.stack([getattr(ex, k) for ex in examples])
+            is_decoder = self._is_decoder_field(k)
+
+            maxlen = max(getattr(ex, k).shape[0] for ex in examples)
+            self._shape_check(maxlen, is_decoder, k)
+
+            batched_shape = (batch_size, maxlen, *v.shape[1:])
+            batch[k] = torch.zeros(batched_shape, dtype=v.dtype, device=v.device)
+
+            if k.endswith('mask'):
+                continue
+
+            batch[k].fill_(self.decoder_pad_id if is_decoder else self.encoder_pad_id)
 
         return batch
 
-    # def pad_tensor*
+    @staticmethod
+    def _is_decoder_field(field_name):
+        return field_name.startswith('decoder_') or field_name == 'labels'
 
+    def _shape_check(self, maxlen, is_decoder, key):
+        """Data shape validation"""
+        if is_decoder:
+            if self._decoder_max_len is not None and self._decoder_max_len != maxlen:
+                raise ValueError(f'decoder input tensors have different lengths ({key})')
+            self._decoder_max_len = maxlen
+        else:
+            if self._encoder_max_len is not None and self._encoder_max_len != maxlen:
+                raise ValueError(f'encoder input tensors have different lengths({key})')
+            self._encoder_max_len = maxlen
 
 
 def get_vocab_top_schema(text):
@@ -132,3 +174,59 @@ def set_seed(seed):
     import random
     random.seed(seed)
 
+
+def get_lr(model: transformers.PreTrainedModel):
+    """Get optimal learning rate according to the Scaling Laws
+    https://arxiv.org/abs/2001.08361
+
+    lr ~= 0.003239 - 0.0001395 log(n_non_embedding_params)
+    """
+
+    if hasattr(model, 'embeddings'):
+        n_embedding_params = get_n_embed_params_trainable(model.embeddings)
+    elif hasattr(model, 'encoder') and hasattr(model, 'decoder'):
+        n_embed_encoder = get_n_embed_params_trainable(model.encoder.embeddings)
+        n_embed_decoder = get_n_embed_params_trainable(model.decoder.embeddings)
+        n_embedding_params = n_embed_encoder + n_embed_decoder
+    else:
+        raise ValueError('Model object should have .embeddings or'
+                         '.encoder.embeddings and .decoder.embeddings')
+
+    n_non_embedding_params = model.num_parameters(only_trainable=True) - n_embedding_params
+    return 0.003239 - 0.0001395 * np.log(n_non_embedding_params)
+
+
+def get_n_embed_params_trainable(embeddings):
+    """
+    :param embeddings: BertEmbeddings
+    :returns: number of trainable embedding parameters
+    """
+    n_params = 0
+
+    tok = embeddings.word_embeddings
+    if tok.training:
+        n_params += tok.num_embeddings * tok.embedding_dim
+
+    pos = embeddings.position_embeddings
+    if pos.training:
+        n_params += pos.num_embeddings * pos.embedding_dim
+
+    typ = embeddings.token_type_embeddings
+    if typ.training:
+        n_params += typ.num_embeddings * typ.embedding_dim
+
+    return n_params
+
+
+def get_model_type(model_name):
+    """Search for a largest substring from transformers.CONFIG_MAPPING"""
+    candidate = ''
+
+    for name in transformers.CONFIG_MAPPING:
+        if name in model_name and len(name) > len(candidate):
+            candidate = name
+
+    if len(candidate) == 0:
+        raise ValueError(f'{model_name} is not found in transformers.CONFIG_MAPPING')
+
+    return candidate
