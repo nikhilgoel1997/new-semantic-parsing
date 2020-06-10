@@ -12,8 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # =============================================================================
+import os
+from pathlib import Path
+
 import torch
+import transformers
 import numpy as np
+
+from new_semantic_parsing.dataclasses import SchemaItem, InputDataClass
 
 
 class TopSchemaTokenizer:
@@ -35,7 +41,7 @@ class TopSchemaTokenizer:
         self.pad_token = '[PAD]'
 
         self._vocab = schema_vocab
-        self._itos = [self.pad_token] + list(schema_vocab)
+        self._itos = [self.pad_token] + sorted(schema_vocab)
         self._stoi = {s: i for i, s in enumerate(self._itos)}
 
         self.pad_token_id = self._stoi[self.pad_token]
@@ -47,6 +53,9 @@ class TopSchemaTokenizer:
         return len(self._itos)
 
     def encode(self, schema_text, source_ids, max_length=None, pad_to_max_length=False):
+        return self.encode_plus(schema_text, source_ids, max_length, pad_to_max_length).ids
+
+    def encode_plus(self, schema_text, source_ids, max_length=None, pad_to_max_length=False) -> SchemaItem:
         schema_tokens = self.tokenize(schema_text)
 
         if max_length is not None:
@@ -57,9 +66,9 @@ class TopSchemaTokenizer:
             if delta > 0:
                 schema_tokens += [self.pad_token] * delta
 
-        ids = self.convert_tokens_to_ids(schema_tokens, source_ids)
+        item = self.convert_tokens_to_ids(schema_tokens, source_ids)
 
-        return ids
+        return item
 
     def batch_encode_plus(
         self,
@@ -69,42 +78,56 @@ class TopSchemaTokenizer:
         pad_to_max_length=True,
         return_tensors=None,
         device='cpu',
-    ):
+    ) -> InputDataClass:
         assert pad_to_max_length, "Not padding to max length is not supported"
 
         batch_size = len(batch_schema_text)
-        batch_ids = []
+        batch_items = []
 
         for schema_text, source_ids in zip(batch_schema_text, batch_source_ids):
-            ids = self.encode(schema_text, source_ids, max_length)
-            batch_ids.append(ids)
+            item = self.encode_plus(schema_text, source_ids, max_length)
+            batch_items.append(item)
 
         if max_length is None:
-            max_length = max(len(t) for t in batch_ids)
+            max_length = max(len(t) for t in batch_items)
 
-        batch_ids_padded = np.ones([batch_size, max_length]) * self.pad_token_id
+        batch_ids_padded = np.full([batch_size, max_length], self.pad_token_id, dtype=np.int32)
+        batch_schema_masks = np.zeros([batch_size, max_length])
         padding_masks = np.ones([batch_size, max_length])
-        for j, ids in enumerate(batch_ids):
-            difference = max_length - len(ids)
+        for j, item in enumerate(batch_items):
+            ids = item.ids
+            schema_mask = item.pointer_mask
+
+            difference = max_length - len(item)
             if difference > 0:
                 ids = ids + [self.pad_token_id] * difference
+                schema_mask = schema_mask + [0] * difference
                 padding_masks[j, -difference:] = 0.
 
             if difference < 0:
                 ids = ids[:max_length]
+                schema_mask = schema_mask[:max_length]
 
             batch_ids_padded[j] = ids
+            batch_schema_masks[j] = schema_mask
 
         if return_tensors is None:
-            return {'input_ids': batch_ids_padded, 'attention_mask': padding_masks}
+            return InputDataClass(
+                input_ids=batch_ids_padded,
+                attention_mask=padding_masks,
+                target_pointer_mask=batch_schema_masks,
+            )
 
         if return_tensors == 'pt':
-            return {'input_ids': torch.LongTensor(batch_ids_padded, device=device),
-                    'attention_mask': torch.FloatTensor(padding_masks, device=device)}
+            return InputDataClass(
+                input_ids=torch.LongTensor(batch_ids_padded, device=device),
+                attention_mask=torch.FloatTensor(padding_masks, device=device),
+                target_pointer_mask=torch.FloatTensor(batch_schema_masks, device=device),
+            )
 
         raise ValueError('`return_tensors` can be eigher None or "pt"')
 
-    def convert_tokens_to_ids(self, schema_tokens, src_token_ids):
+    def convert_tokens_to_ids(self, schema_tokens, src_token_ids) -> SchemaItem:
         """
         :param schema_tokens: string
         :param src_token_ids: list or numpy array of integers
@@ -112,6 +135,8 @@ class TopSchemaTokenizer:
             position id = position + vocab_size
         """
         schema_ids = []
+        pointer_mask = []
+
         # points to a first token corresponding to a word
         has_cls = (
             self._src_tokenizer.cls_token is not None and
@@ -119,8 +144,14 @@ class TopSchemaTokenizer:
         )
         src_tokens_pointer = int(has_cls)
 
-        for token in schema_tokens:
-            if token in self._vocab:
+        for i, token in enumerate(schema_tokens):
+            token_follows_schema = token in {'[', ']', 'IN:', 'SL:'} or schema_tokens[i-1] in {'IN:', 'SL:'}
+            if token in self._vocab and token_follows_schema:
+                # The reason for second condition are cases when a word from a text exacly equal to the schema word
+                # e.g. "IS THERE A PATH"
+                # PATH is in a schema vocabulary, but not a schema word
+
+                pointer_mask.append(0)
                 schema_ids.append(self._stoi[token])
                 continue
 
@@ -128,10 +159,29 @@ class TopSchemaTokenizer:
 
             for subtoken in subtokens:
                 assert subtoken == src_token_ids[src_tokens_pointer]
+                pointer_mask.append(1)
                 schema_ids.append(self.vocab_size + src_tokens_pointer)
                 src_tokens_pointer += 1
 
-        return schema_ids
+        return SchemaItem(schema_ids, pointer_mask)
+
+    def save(self, path):
+        path = Path(path)
+        os.makedirs(path)
+
+        with open(path/'schema_vocab.txt', 'w') as f:
+            f.write('\n'.join(self._vocab))
+
+        self._src_tokenizer.save_pretrained(path)
+
+    @classmethod
+    def load(cls, path):
+        with open(Path(path)/'schema_vocab.txt') as f:
+            schema_vocab = set(f.read().strip('\n').split('\n'))
+
+        text_tokenizer = transformers.AutoTokenizer.from_pretrained(path)
+
+        return cls(schema_vocab, text_tokenizer)
 
     @staticmethod
     def tokenize(text):

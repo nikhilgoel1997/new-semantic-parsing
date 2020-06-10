@@ -12,12 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # =============================================================================
-
+import os
+import shutil
+import tempfile
+import random
 import unittest
+from pprint import pprint
 
 import torch
 import transformers
+import numpy as np
+
 from new_semantic_parsing import EncoderDecoderWPointerModel
+from new_semantic_parsing.dataclasses import InputDataClass
+from new_semantic_parsing.schema_tokenizer import TopSchemaTokenizer
+from new_semantic_parsing.utils import PaddedDataCollator, compute_metrics
 
 
 class EncoderDecoderWPointerTest(unittest.TestCase):
@@ -191,9 +200,103 @@ class EncoderDecoderWPointerTest(unittest.TestCase):
 
         loss = model(input_ids=src_seq,
                      decoder_input_ids=tgt_seq,
-                                pointer_attention_mask=mask,
-                                lm_labels=tgt_seq)[0]
+                     pointer_attention_mask=mask,
+                     labels=tgt_seq)[0]
 
         self.assertEqual(loss.shape, torch.Size([]))
         self.assertEqual(loss.dtype, torch.float32)
         self.assertGreater(loss, 0)
+
+
+class ModelOverfitTest(unittest.TestCase):
+    def setUp(self):
+        self.output_dir = next(tempfile._get_candidate_names())
+
+    def tearDown(self):
+        if os.path.exists(self.output_dir):
+            shutil.rmtree(self.output_dir)
+        if os.path.exists('runs'):
+            shutil.rmtree('runs')
+
+    def test_overfit(self):
+        random.seed(42)
+        torch.manual_seed(42)
+        np.random.seed(42)
+        # NOTE: the test is still not deterministic
+        # NOTE: very long test, takes about ~15-20 sedonds
+
+        tokenizer = transformers.AutoTokenizer.from_pretrained('distilbert-base-uncased')
+
+        vocab = {'[', ']', 'IN:', 'SL:', 'GET_DIRECTIONS', 'DESTINATION',
+                 'DATE_TIME_DEPARTURE', 'GET_ESTIMATED_ARRIVAL'}
+        schema_tokenizer = TopSchemaTokenizer(vocab, tokenizer)
+
+        model = EncoderDecoderWPointerModel.from_parameters(
+            layers=3, hidden=128, heads=2,
+            src_vocab_size=tokenizer.vocab_size, tgt_vocab_size=schema_tokenizer.vocab_size
+        )
+
+        source_texts = [
+            'Directions to Lowell',
+            'Get directions to Mountain View',
+        ]
+        schema_texts = [
+            '[IN:GET_DIRECTIONS Directions to [SL:DESTINATION Lowell]]',
+            '[IN:GET_DIRECTIONS Get directions to [SL:DESTINATION Mountain View]]'
+        ]
+
+        source_ids = tokenizer.batch_encode_plus(source_texts, pad_to_max_length=True)['input_ids']
+
+        schema_batch = schema_tokenizer.batch_encode_plus(
+            schema_texts, source_ids, pad_to_max_length=True, return_tensors='pt'
+        )
+
+        source_ids = torch.LongTensor(source_ids)
+        source_ids_mask = ((source_ids != tokenizer.pad_token_id) &
+                           (source_ids != tokenizer.cls_token_id) &
+                           (source_ids != tokenizer.sep_token_id)).type(torch.FloatTensor)
+
+        class MockDataset(torch.utils.data.Dataset):
+            def __len__(self): return 2
+
+            def __getitem__(self, i):
+                return InputDataClass(**{
+                    'input_ids': source_ids[i],
+                    'attention_mask': source_ids_mask[i],
+                    'decoder_input_ids': schema_batch.input_ids[i],
+                    'decoder_attention_mask': schema_batch.attention_mask[i],
+                    'labels': schema_batch.input_ids[i],
+                })
+
+        train_args = transformers.TrainingArguments(
+            output_dir=self.output_dir,
+            do_train=True,
+            num_train_epochs=100,
+            seed=42,
+        )
+
+        trainer = transformers.Trainer(
+            model,
+            train_args,
+            train_dataset=MockDataset(),
+            data_collator=PaddedDataCollator(),
+            eval_dataset=MockDataset(),
+            compute_metrics=compute_metrics,
+        )
+        # a trick to reduce the amount of logging
+        trainer.is_local_master = lambda: False
+
+        random.seed(42)
+        torch.manual_seed(42)
+        np.random.seed(42)
+
+        train_out = trainer.train()
+        eval_out = trainer.evaluate()
+
+        pprint('Training output')
+        pprint(train_out)
+        pprint('Evaluation output')
+        pprint(eval_out)
+
+        # accuracy should be 1.0 and eval loss should be around 0.414
+        self.assertGreater(eval_out['eval_accuracy'], 0.99)

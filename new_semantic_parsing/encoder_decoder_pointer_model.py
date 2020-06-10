@@ -94,7 +94,7 @@ class EncoderDecoderWPointerModel(transformers.EncoderDecoderModel):
         decoder_head_mask=None,
         decoder_inputs_embeds=None,
         pointer_attention_mask=None,
-        lm_labels=None,
+        labels=None,
         **kwargs,
     ):
         """
@@ -112,7 +112,7 @@ class EncoderDecoderWPointerModel(transformers.EncoderDecoderModel):
             decoder input padding mask, causal mask is generated inside the decoder class
         :param decoder_head_mask: FloatTensor of shape (num_heads,) or (num_layers, num_heads)
         :param pointer_attention_mask: FloatTensor of shape (batch_size, src_seq_len), padding mask for the pointer
-        :param lm_labels: LongTensor of shape (batch_size, tgt_seq_len), typically equal decoder_input_ids
+        :param labels: LongTensor of shape (batch_size, tgt_seq_len), typically equal decoder_input_ids
         :param kwargs:
         :return:
             tuple of
@@ -151,14 +151,15 @@ class EncoderDecoderWPointerModel(transformers.EncoderDecoderModel):
         decoder_hidden_states = decoder_outputs[0]
 
         # compute pointer scores via attending from decoder hiddens to encoder hiddens
-        # NOTE: this implementaion is computationally inefficient during inference
 
         query = self.decoder_q_proj(decoder_hidden_states)  # (bs, tgt_len, decoder_hidden)
         keys = encoder_hidden_states  # (bs, src_len, encoder_hidden)
 
+        # NOTE: this implementaion is computationally inefficient during inference
         attention_scores = query @ keys.transpose(1, 2)  # (bs, tgt_len, src_len)
 
         # mask becomes 0 for all 1 (keep) positions and -1e4 in all 0 (mask) positions
+        # NOTE: we can use this mask to additionaly guide the model
         pointer_attention_mask = self._get_pointer_attention_mask(
             pointer_attention_mask, attention_scores.shape,
         )
@@ -168,12 +169,12 @@ class EncoderDecoderWPointerModel(transformers.EncoderDecoderModel):
         decoder_logits = self.lm_head(decoder_hidden_states)  # (bs, tgt_len, tgt_vocab_size)
         combined_logits = torch.cat([decoder_logits, attention_scores], dim=-1)
 
-        if lm_labels is None:
+        if labels is None:
             return (combined_logits,) + decoder_outputs + encoder_outputs
 
         loss = F.cross_entropy(
             combined_logits.view(-1, combined_logits.shape[-1]),
-            lm_labels.view(-1)
+            labels.view(-1)
         )
         return (loss, combined_logits) + decoder_outputs + encoder_outputs
 

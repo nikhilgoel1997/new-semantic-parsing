@@ -36,5 +36,5 @@ class TopSchemaGetVocabularyTest(unittest.TestCase):
             'TYPE_RELATION',
         }
 
-        res = utils.top_schema_get_vocab(schema_str)
+        res = utils.get_vocab_top_schema(schema_str)
         self.assertSetEqual(res, schema_voc)
