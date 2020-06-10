@@ -90,9 +90,11 @@ def get_vocab_top_schema(text):
 def compute_metrics(eval_prediction: transformers.EvalPrediction):
     predictions = np.argmax(eval_prediction.predictions, axis=-1)
     accuracy = np.mean(predictions.reshape(-1) == eval_prediction.label_ids.reshape(-1))
+    exact_match = np.mean(np.all(predictions == eval_prediction.label_ids, axis=1))
 
     return {
         'accuracy': accuracy,
+        'exact_match': exact_match,
     }
 
 
@@ -101,3 +103,6 @@ def set_seed(seed):
     torch.manual_seed(seed)
     import numpy
     numpy.random.seed(seed)
+    import random
+    random.seed(seed)
+
