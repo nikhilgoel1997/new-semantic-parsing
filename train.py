@@ -48,12 +48,15 @@ def parse_args(args=None):
     # model
     parser.add_argument('--encoder-model', default=None,
                         help='pretrained model name, e.g. bert-base-uncased')
-    parser.add_argument('--hidden', default=None, type=int,
-                        help='hidden size of the encoder and decoder. '
-                             'Ignored if --encoder-model is provided')
     parser.add_argument('--layers', default=None, type=int,
                         help='number of layers in each encoder and decoder. '
                              'Ignored if --encoder-model is provided.')
+    parser.add_argument('--hidden', default=None, type=int,
+                        help='hidden size of the encoder and decoder. '
+                             'Ignored if --encoder-model is provided')
+    parser.add_argument('--heads', default=None, type=int,
+                        help='hidden size of the encoder and decoder. '
+                             'Ignored if --encoder-model is provided')
     # training
     parser.add_argument('--epochs', default=1, type=int)
     parser.add_argument('--seed', default=1, type=int)
@@ -110,7 +113,13 @@ if __name__ == '__main__':
 
         model = EncoderDecoderWPointerModel(encoder, decoder)
     else:
-        raise NotImplementedError()
+        model = EncoderDecoderWPointerModel.from_parameters(
+            layers=args.layers,
+            hidden=args.hidden,
+            heads=args.heads,
+            src_vocab_size=text_tokenizer.vocab_size,
+            tgt_vocab_size=schema_tokenizer.vocab_size,
+        )
 
     logger.info('Starting training')
     lr = args.lr or utils.get_lr(model)

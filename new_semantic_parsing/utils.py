@@ -20,7 +20,7 @@ from new_semantic_parsing.dataclasses import InputDataClass
 
 
 class PointerDataset(torch.utils.data.Dataset):
-    def __init__(self, source_tensors, target_tensors=None, target_pointer_masks=None):
+    def __init__(self, source_tensors, target_tensors=None, source_pointer_masks=None, target_pointer_masks=None):
         """
         :param source_tensors: list of tensors, input ids
         :param target_tensors: list of tensors, labels
@@ -29,10 +29,13 @@ class PointerDataset(torch.utils.data.Dataset):
         self.source_tensors = source_tensors
         self.target_tensors = target_tensors
         self.target_pointer_masks = target_pointer_masks
+        self.source_pointer_masks = source_pointer_masks
 
         self.torchified = isinstance(source_tensors[0], torch.Tensor)
         if target_tensors is not None:
             self.torchified = self.torchified and isinstance(target_tensors[0], torch.Tensor)
+        if source_pointer_masks is not None:
+            self.torchified = self.torchified and isinstance(source_pointer_masks[0], torch.Tensor)
         if target_pointer_masks is not None:
             self.torchified = self.torchified and isinstance(target_pointer_masks[0], torch.Tensor)
 
@@ -40,9 +43,14 @@ class PointerDataset(torch.utils.data.Dataset):
         return len(self.source_tensors)
 
     def __getitem__(self, item) -> InputDataClass:
+        source_pointer_mask = None
+        if self.source_pointer_masks is not None:
+            source_pointer_mask = self.source_pointer_masks[item]
+
         if self.target_tensors is None:
             return InputDataClass(
                 input_ids=self.source_tensors[item],
+                pointer_mask=source_pointer_mask,
             )
 
         target_pointer_mask = None
@@ -51,8 +59,10 @@ class PointerDataset(torch.utils.data.Dataset):
 
         return InputDataClass(
             input_ids=self.source_tensors[item],
+            pointer_mask=source_pointer_mask,
             decoder_input_ids=self.target_tensors[item],
             decoder_pointer_mask=target_pointer_mask,
+            labels=self.target_tensors[item],
         )
 
     def torchify(self):
@@ -60,7 +70,11 @@ class PointerDataset(torch.utils.data.Dataset):
             return
 
         self.source_tensors = [torch.LongTensor(t) for t in self.source_tensors]
-        self.target_tensors = [torch.LongTensor(t) for t in self.target_tensors]
+
+        if self.target_tensors is not None:
+            self.target_tensors = [torch.LongTensor(t) for t in self.target_tensors]
+        if self.source_pointer_masks is not None:
+            self.source_pointer_masks = [torch.FloatTensor(t) for t in self.source_pointer_masks]
         if self.target_pointer_masks is not None:
             self.target_pointer_masks = [torch.FloatTensor(t) for t in self.target_pointer_masks]
 
@@ -153,6 +167,17 @@ def get_vocab_top_schema(text):
         if token[:3] in ['IN:', 'SL:']:
             schema_tokens.add(token[3:])
     return schema_tokens
+
+
+def get_src_pointer_mask(input_ids, tokenizer: transformers.PreTrainedTokenizer):
+    """Compute mask which ignores padding and special tokens"""
+    mask = np.ones(len(input_ids))
+    if input_ids[0] == tokenizer.cls_token_id:
+        mask[0] = 0
+    for i, token_id in enumerate(input_ids):
+        if token_id in (tokenizer.sep_token_id, tokenizer.pad_token_id):
+            mask[i] = 0
+    return mask
 
 
 def compute_metrics(eval_prediction: transformers.EvalPrediction):

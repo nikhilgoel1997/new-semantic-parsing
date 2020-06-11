@@ -53,16 +53,33 @@ class PointerDatasetTest(unittest.TestCase):
         tgt_tensors = [torch.randint(0, 20, size=(random.randint(5, 15),), dtype=torch.int64)
                        for _ in range(10)]
 
-        dataset = utils.PointerDataset(src_tensors, tgt_tensors)
+        dataset = utils.PointerDataset(src_tensors, tgt_tensors, None)
 
         item = dataset[0]
 
         self.assertIsInstance(item, InputDataClass)
         self.assertIsInstance(item.input_ids, torch.LongTensor)
         self.assertIsInstance(item.decoder_input_ids, torch.LongTensor)
+        self.assertIsInstance(item.labels, torch.LongTensor)
+
+    def test_getitem_inference(self):
+        utils.set_seed(29)
+
+        src_tensors = [torch.randint(0, 10, size=(random.randint(5, 13),), dtype=torch.int64)
+                       for _ in range(10)]
+
+        dataset = utils.PointerDataset(src_tensors)
+
+        item = dataset[0]
+
+        self.assertIsInstance(item, InputDataClass)
+        self.assertIsInstance(item.input_ids, torch.LongTensor)
+
+        self.assertIsNone(item.decoder_input_ids)
+        self.assertIsNone(item.labels)
 
     def test_len(self):
-        dataset = utils.PointerDataset([None, None], [None, None])
+        dataset = utils.PointerDataset([None, None], [None, None], None)
         self.assertEqual(len(dataset), 2)
 
 

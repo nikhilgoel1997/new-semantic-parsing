@@ -18,6 +18,7 @@ import argparse
 import logging
 from pathlib import Path
 from functools import reduce
+from typing import List
 
 import toml
 import torch
@@ -30,9 +31,10 @@ from tqdm import tqdm
 from new_semantic_parsing import TopSchemaTokenizer
 from new_semantic_parsing import utils
 from new_semantic_parsing.utils import PointerDataset
+from new_semantic_parsing.dataclasses import SchemaItem
 
 
-SAVE_FORMAT_VERSION = '0.1-nightly-Jun11'
+SAVE_FORMAT_VERSION = '0.1-nightly-Jun12'
 
 
 logging.basicConfig(
@@ -62,18 +64,21 @@ def parse_args(args=None):
 def make_dataset(filepath, text_tokenizer, schema_tokenizer):
     data = pd.read_table(filepath, names=['text', 'tokens', 'schema'])
 
-    text_ids = [text_tokenizer.encode(text) for text in tqdm(data.tokens)]
+    text_ids: List[list] = [text_tokenizer.encode(text) for text in tqdm(data.tokens)]
+    # TODO: move everything below to .encode_plus (and add torchification?)
+    # NOTE: slow
+    text_pointer_masks: List[list] = [utils.get_src_pointer_mask(i, text_tokenizer) for i in text_ids]
 
     schema_ids = []
-    pointer_masks = []
+    schema_pointer_masks = []
 
     for i, schema in tqdm(enumerate(data.schema), total=len(data)):
 
-        item = schema_tokenizer.encode_plus(schema, text_ids[i])
+        item: SchemaItem = schema_tokenizer.encode_plus(schema, text_ids[i])
         schema_ids.append(item.ids)
-        pointer_masks.append(item.pointer_mask)
+        schema_pointer_masks.append(item.pointer_mask)
 
-    dataset = PointerDataset(text_ids, schema_ids, pointer_masks)
+    dataset = PointerDataset(text_ids, schema_ids, text_pointer_masks, schema_pointer_masks)
     dataset.torchify()
 
     return dataset

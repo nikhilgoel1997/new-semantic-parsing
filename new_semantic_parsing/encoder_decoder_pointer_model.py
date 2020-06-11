@@ -61,6 +61,14 @@ class EncoderDecoderWPointerModel(transformers.EncoderDecoderModel):
         src_vocab_size,
         tgt_vocab_size,
     ):
+        """
+        :param layers: number of layers for encoder and for decoder
+        :param hidden: hidden size
+        :param heads: number of attention heads
+        :param src_vocab_size: source vocabulary size
+        :param tgt_vocab_size: size of the target vocabulary (excluding pointers)
+        :return: EncoderDecoderWPointerModel
+        """
         encoder_config = transformers.BertConfig(
             hidden_size=hidden,
             intermediate_size=4 * hidden,
@@ -93,7 +101,8 @@ class EncoderDecoderWPointerModel(transformers.EncoderDecoderModel):
         decoder_attention_mask=None,
         decoder_head_mask=None,
         decoder_inputs_embeds=None,
-        pointer_attention_mask=None,
+        pointer_mask=None,
+        decoder_pointer_mask=None,
         labels=None,
         **kwargs,
     ):
@@ -111,7 +120,7 @@ class EncoderDecoderWPointerModel(transformers.EncoderDecoderModel):
         :param decoder_attention_mask: FloatTensor of shape (batch_size, tgt_seq_lqn), padding mask for the encoder
             decoder input padding mask, causal mask is generated inside the decoder class
         :param decoder_head_mask: FloatTensor of shape (num_heads,) or (num_layers, num_heads)
-        :param pointer_attention_mask: FloatTensor of shape (batch_size, src_seq_len), padding mask for the pointer
+        :param pointer_mask: FloatTensor of shape (batch_size, src_seq_len), padding mask for the pointer
         :param labels: LongTensor of shape (batch_size, tgt_seq_len), typically equal decoder_input_ids
         :param kwargs:
         :return:
@@ -160,10 +169,10 @@ class EncoderDecoderWPointerModel(transformers.EncoderDecoderModel):
 
         # mask becomes 0 for all 1 (keep) positions and -1e4 in all 0 (mask) positions
         # NOTE: we can use this mask to additionaly guide the model
-        pointer_attention_mask = self._get_pointer_attention_mask(
-            pointer_attention_mask, attention_scores.shape,
+        pointer_mask = self._get_pointer_attention_mask(
+            pointer_mask, attention_scores.shape,
         )
-        attention_scores = attention_scores + pointer_attention_mask
+        attention_scores = attention_scores + pointer_mask
 
         # NOTE: maybe add some kind of normalization between dec_logits?
         decoder_logits = self.lm_head(decoder_hidden_states)  # (bs, tgt_len, tgt_vocab_size)

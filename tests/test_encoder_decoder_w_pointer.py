@@ -118,7 +118,7 @@ class EncoderDecoderWPointerTest(unittest.TestCase):
 
         combined_logits = model(input_ids=src_seq,
                                 decoder_input_ids=tgt_seq,
-                                pointer_attention_mask=mask)[0]
+                                pointer_mask=mask)[0]
 
         expected_shape = (1, tgt_seq.shape[1], tgt_vocab_size + src_seq.shape[1])
         self.assertEqual(combined_logits.shape, expected_shape)
@@ -159,7 +159,7 @@ class EncoderDecoderWPointerTest(unittest.TestCase):
 
         combined_logits = model(input_ids=src_seq,
                                 decoder_input_ids=tgt_seq,
-                                pointer_attention_mask=mask)[0]
+                                pointer_mask=mask)[0]
 
         expected_shape = (2, tgt_seq.shape[1], tgt_vocab_size + src_seq.shape[1])
         self.assertEqual(combined_logits.shape, expected_shape)
@@ -200,7 +200,7 @@ class EncoderDecoderWPointerTest(unittest.TestCase):
 
         loss = model(input_ids=src_seq,
                      decoder_input_ids=tgt_seq,
-                     pointer_attention_mask=mask,
+                     pointer_mask=mask,
                      labels=tgt_seq)[0]
 
         self.assertEqual(loss.shape, torch.Size([]))

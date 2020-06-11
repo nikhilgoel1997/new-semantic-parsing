@@ -57,6 +57,7 @@ class TopSchemaTokenizer:
         return self.encode_plus(schema_text, source_ids, max_length, pad_to_max_length).ids
 
     def encode_plus(self, schema_text, source_ids, max_length=None, pad_to_max_length=False) -> SchemaItem:
+        # NOTE: this method should do the same things as .batch_encode_plus
         schema_tokens = self.tokenize(schema_text)
 
         if max_length is not None:
@@ -80,6 +81,9 @@ class TopSchemaTokenizer:
         return_tensors=None,
         device='cpu',
     ) -> InputDataClass:
+        # NOTE: this method really doing the same thing as the pipeline in preprocess.py
+        # probably, we need to reduce code duplication
+        # TODO: add text pointer mask computation?
         assert pad_to_max_length, "Not padding to max length is not supported"
 
         batch_size = len(batch_schema_text)
