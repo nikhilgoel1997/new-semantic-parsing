@@ -15,3 +15,4 @@
 
 from .encoder_decoder_pointer_model import EncoderDecoderWPointerModel
 from .schema_tokenizer import TopSchemaTokenizer
+from .trainer import Trainer

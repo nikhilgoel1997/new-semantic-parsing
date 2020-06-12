@@ -125,6 +125,7 @@ class EncoderDecoderWPointerModel(transformers.EncoderDecoderModel):
         :param kwargs:
         :return:
             tuple of
+                loss (if labels are specified)
                 combined_logits tensor of shape (batch_size, tgt_seq_len, tgt_vocab_size + src_vocab_size),
                 decoder outputs,
                 encoder outputs,

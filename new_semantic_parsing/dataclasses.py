@@ -28,3 +28,8 @@ class SchemaItem:
 
     def __len__(self):
         return len(self.ids)
+
+
+class Seq2SeqEvalPrediciton:
+    predictions: List[np.ndarray]
+    label_ids: List[np.ndarray]

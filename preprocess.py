@@ -30,7 +30,7 @@ from tqdm import tqdm
 
 from new_semantic_parsing import TopSchemaTokenizer
 from new_semantic_parsing import utils
-from new_semantic_parsing.utils import PointerDataset
+from new_semantic_parsing.data import PointerDataset
 from new_semantic_parsing.dataclasses import SchemaItem
 
 

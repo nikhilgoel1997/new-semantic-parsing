@@ -26,7 +26,8 @@ import numpy as np
 from new_semantic_parsing import EncoderDecoderWPointerModel
 from new_semantic_parsing.dataclasses import InputDataClass
 from new_semantic_parsing.schema_tokenizer import TopSchemaTokenizer
-from new_semantic_parsing.utils import PaddedDataCollator, compute_metrics
+from new_semantic_parsing.utils import compute_metrics
+from new_semantic_parsing.data import PaddedDataCollator
 
 
 class EncoderDecoderWPointerTest(unittest.TestCase):
@@ -223,7 +224,7 @@ class ModelOverfitTest(unittest.TestCase):
         torch.manual_seed(42)
         np.random.seed(42)
         # NOTE: the test is still not deterministic
-        # NOTE: very long test, takes about ~15-20 sedonds
+        # NOTE: very long test, takes about ~10 seconds
 
         tokenizer = transformers.AutoTokenizer.from_pretrained('distilbert-base-uncased')
 
@@ -271,7 +272,7 @@ class ModelOverfitTest(unittest.TestCase):
         train_args = transformers.TrainingArguments(
             output_dir=self.output_dir,
             do_train=True,
-            num_train_epochs=100,
+            num_train_epochs=55,
             seed=42,
         )
 
@@ -298,5 +299,17 @@ class ModelOverfitTest(unittest.TestCase):
         pprint('Evaluation output')
         pprint(eval_out)
 
-        # accuracy should be 1.0 and eval loss should be around 0.414
+        # accuracy should be 1.0 and eval loss should be around 0.9
         self.assertGreater(eval_out['eval_accuracy'], 0.99)
+
+
+# this compute_metrics is not compatible with the new_semantic_parsing.Trainer and only used here
+def compute_metrics(eval_prediction: transformers.EvalPrediction):
+    predictions = np.argmax(eval_prediction.predictions, axis=-1)
+    accuracy = np.mean(predictions.reshape(-1) == eval_prediction.label_ids.reshape(-1))
+    exact_match = np.mean(np.all(predictions == eval_prediction.label_ids, axis=1))
+
+    return {
+        'accuracy': accuracy,
+        'exact_match': exact_match,
+    }

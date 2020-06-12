@@ -23,8 +23,12 @@ import torch
 
 import transformers
 
-from new_semantic_parsing import EncoderDecoderWPointerModel
-from new_semantic_parsing import TopSchemaTokenizer
+from new_semantic_parsing import (
+    EncoderDecoderWPointerModel,
+    TopSchemaTokenizer,
+    Trainer,
+)
+from new_semantic_parsing.data import Seq2SeqDataCollator
 from new_semantic_parsing import utils
 
 
@@ -143,9 +147,9 @@ if __name__ == '__main__':
         local_rank=-1,
     )
 
-    collator = utils.Seq2SeqDataCollator(text_tokenizer.pad_token_id, schema_tokenizer.pad_token_id)
+    collator = Seq2SeqDataCollator(text_tokenizer.pad_token_id, schema_tokenizer.pad_token_id)
 
-    trainer = transformers.Trainer(
+    trainer = Trainer(
         model,
         train_args,
         train_dataset=train_dataset,
