@@ -29,6 +29,9 @@ class TransformersTokenizerMock:
         subtokens = x.split(',')
         return [int(t[3:]) for t in subtokens]
 
+    def decode(self, x):
+        return ' '.join([f'tok{i}' for i in x])
+
     @classmethod
     def from_pretrained(cls, path):
         return cls()
@@ -141,6 +144,22 @@ class TopSchemaTokenizerTest(unittest.TestCase):
 
         new_ids = loaded_tokenizer.encode(schema_str, source_tokens)
         self.assertSequenceEqual(ids, new_ids)
+
+    def test_decode(self):
+        vocab = {'[', ']', 'IN:', 'INTENT1', 'SL:', 'SLOT1'}
+        src_tokenizer = TransformersTokenizerMock()
+
+        tokenizer = TopSchemaTokenizer(vocab, src_tokenizer)
+
+        schema_str = '[IN:INTENT1 tok6 tok2 tok31 [SL:SLOT1 tok42 tok5 ] ]'
+        source_tokens = [6, 2, 31, 42, 5]
+        # note that TransformersTokenizerMock splits tok6,tok2 into two subtokens
+        # note that the vocabulary is sorted
+        expected_ids = [5, 1, 2, 7, 8, 9, 5, 3, 4, 10, 11, 6, 6]
+
+        schema_decoded = tokenizer.decode(expected_ids, source_tokens)
+
+        self.assertEqual(schema_str, schema_decoded)
 
     # def test_batch_encode_plus(self):
     # def test_batch_encode_plus_return_tensors(self):

@@ -34,7 +34,7 @@ class TopSchemaTokenizer:
 
     [CLS] token is ignored for position calculation
     """
-    def __init__(self, schema_vocab, src_text_tokenizer):
+    def __init__(self, schema_vocab, src_text_tokenizer: transformers.PreTrainedTokenizer):
         """
         :param schema_vocab: iterable with all schema tokens (not source text tokens)
         :param src_text_tokenizer: transformers.PreTrainedTokenizer object
@@ -170,6 +170,22 @@ class TopSchemaTokenizer:
 
         return SchemaItem(schema_ids, pointer_mask)
 
+    def decode(self, ids, source_ids):
+        schema = []
+        text_chunk_ids = []  # we combine text into chunks to that it would be easier to merge bpe tokens into words
+
+        for i in ids:
+            if i < self.vocab_size:
+                if text_chunk_ids:
+                    schema.append(self.src_tokenizer.decode(text_chunk_ids))
+                    text_chunk_ids = []
+                schema.append(self._itos[i])
+            else:
+                position = i - self.vocab_size
+                text_chunk_ids.append(source_ids[position])
+        schema = self.detokenize(schema)
+        return schema
+
     def save(self, path, encoder_model_type=None):
         """
         Save schema tokenizer and text tokenizer
@@ -204,10 +220,22 @@ class TopSchemaTokenizer:
         tokenized = ''
         for char in text:
             if char in ['[', ']']:
-                char = ' ' + char + ' '
-            if char in [':']:
-                char = char + ' '
-            tokenized += char
+                tokenized += ' ' + char + ' '
+            elif char in [':']:
+                tokenized += char + ' '
+
         tokens = tokenized.strip(' ').split(' ')
         tokens = [t for t in tokens if t != '']
         return tokens
+
+    def detokenize(self, tokens):
+        merge_vocab = {'[', 'IN:', 'SL:'}
+        text = ''
+
+        for token in tokens:
+            if token in merge_vocab:
+                text += token
+            else:
+                text += token + ' '
+
+        return text.strip(' ')
