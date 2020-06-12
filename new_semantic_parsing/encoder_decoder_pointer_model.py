@@ -20,8 +20,6 @@ import torch.nn.functional as F
 
 import transformers
 
-from transformers import PreTrainedModel, BertModel
-
 
 class EncoderDecoderWPointerModel(transformers.EncoderDecoderModel):
     """
