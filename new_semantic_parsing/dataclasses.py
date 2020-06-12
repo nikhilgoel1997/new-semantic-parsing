@@ -30,6 +30,7 @@ class SchemaItem:
         return len(self.ids)
 
 
+@dataclass
 class Seq2SeqEvalPrediciton:
     predictions: List[np.ndarray]
     label_ids: List[np.ndarray]

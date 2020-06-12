@@ -161,6 +161,8 @@ if __name__ == '__main__':
     train_results = trainer.train()
     logger.info(train_results)
 
+    trainer.save_model(args.output_dir)
+
     eval_results = trainer.evaluate()
     logger.info(eval_results)
 

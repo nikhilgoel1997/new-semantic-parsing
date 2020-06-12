@@ -13,8 +13,10 @@
 # limitations under the License.
 # =============================================================================
 import unittest
+import numpy as np
 
 from new_semantic_parsing import utils
+from new_semantic_parsing.dataclasses import Seq2SeqEvalPrediciton
 
 
 class TopSchemaGetVocabularyTest(unittest.TestCase):
@@ -45,3 +47,30 @@ class TestGetModelType(unittest.TestCase):
     def test_model_type(self):
         model_type = utils.get_model_type('distilbert-base-uncased')
         self.assertEqual(model_type, 'distilbert')
+
+
+class TestGetMetrics(unittest.TestCase):
+    def test_metrics(self):
+        x = [np.array([1, 2, 3, 4, 5, 6]),
+             np.array([1, 3, 5, 7, 9]),
+             np.array([19, 18, 17, 16, 18, 13, 19])]
+
+        x_logits = []
+        for i, x_i in enumerate(x):
+            logit = np.zeros([len(x_i), 20])
+            for j, x_ij in enumerate(x_i):
+                logit[j, x_ij] = 1.
+            x_logits.append(logit)
+
+        y = [np.array([3, 2, 8, 4, 5, 5]),
+             np.array([1, 3, 5, 7, 9]),
+             np.array([19, 8, 17, 16, 18, 5, 1])]
+
+        # NOTE: we expect micro averaging
+        expected_accuracy = 0.66666666666
+        expected_exact_match = 0.33333333333
+
+        metrics = utils.compute_metrics(Seq2SeqEvalPrediciton(x_logits, y))
+
+        self.assertAlmostEqual(metrics['accuracy'], expected_accuracy)
+        self.assertAlmostEqual(metrics['exact_match'], expected_exact_match)
