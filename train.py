@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # =============================================================================
-
+import os
 import sys
 import argparse
 import logging
@@ -70,6 +70,7 @@ def parse_args(args=None):
     parser.add_argument('--warmup-steps', default=0, type=int)
     parser.add_argument('--gradient-accumulation-steps', default=1)
     parser.add_argument('--batch-size', default=64)
+    parser.add_argument('--wandb-project', default=None)
     return parser.parse_args(args)
 
 
@@ -149,6 +150,7 @@ if __name__ == '__main__':
 
     collator = Seq2SeqDataCollator(text_tokenizer.pad_token_id, schema_tokenizer.pad_token_id)
 
+    os.environ["WANDB_PROJECT"] = args.wandb_project or "new_semantic_parsing"
     trainer = Trainer(
         model,
         train_args,

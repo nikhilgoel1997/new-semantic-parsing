@@ -4,3 +4,4 @@ tokenizers==0.7
 numpy
 pandas
 toml
+wandb

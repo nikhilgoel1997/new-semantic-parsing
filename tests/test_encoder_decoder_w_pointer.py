@@ -276,6 +276,7 @@ class ModelOverfitTest(unittest.TestCase):
             seed=42,
         )
 
+        os.environ["WANDB_DISABLED"] = "true"
         trainer = transformers.Trainer(
             model,
             train_args,
