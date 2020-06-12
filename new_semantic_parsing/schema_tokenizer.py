@@ -220,10 +220,10 @@ class TopSchemaTokenizer:
         tokenized = ''
         for char in text:
             if char in ['[', ']']:
-                tokenized += ' ' + char + ' '
-            elif char in [':']:
-                tokenized += char + ' '
-
+                char = ' ' + char + ' '
+            if char in [':']:
+                char = char + ' '
+            tokenized += char
         tokens = tokenized.strip(' ').split(' ')
         tokens = [t for t in tokens if t != '']
         return tokens
