@@ -69,7 +69,7 @@ def parse_args(args=None):
                         help='By default, lr is chosen according to the Scaling Laws for Neural Language Models')
     parser.add_argument('--weight-decay', default=0, type=float)
     parser.add_argument('--warmup-steps', default=0, type=int)
-    parser.add_argument('--gradient-accumulation-steps', default=1)
+    parser.add_argument('--gradient-accumulation-steps', default=1, type=int)
     parser.add_argument('--batch-size', default=64, type=int)
     parser.add_argument('--wandb-project', default=None)
     return parser.parse_args(args)
