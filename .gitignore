@@ -1,5 +1,7 @@
 data
 data-bin
+output_dir
+wandb
 
 # tensorboard
 **/runs/**
