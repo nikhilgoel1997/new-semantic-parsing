@@ -14,6 +14,7 @@
 # =============================================================================
 import os
 import sys
+import tempfile
 import argparse
 import logging
 from pathlib import Path
@@ -47,7 +48,7 @@ def parse_args(args=None):
     parser.add_argument('--data-dir', required=True,
                         help='Path to preprocess.py --save-dir containing tokenizer, '
                              'data.pkl, and args.toml')
-    parser.add_argument('--output-dir', default='output_dir',
+    parser.add_argument('--output-dir', default=None,
                         help='directory to store checkpoints and other output files')
     # model
     parser.add_argument('--encoder-model', default=None,
@@ -69,7 +70,7 @@ def parse_args(args=None):
     parser.add_argument('--weight-decay', default=0, type=float)
     parser.add_argument('--warmup-steps', default=0, type=int)
     parser.add_argument('--gradient-accumulation-steps', default=1)
-    parser.add_argument('--batch-size', default=64)
+    parser.add_argument('--batch-size', default=64, type=int)
     parser.add_argument('--wandb-project', default=None)
     return parser.parse_args(args)
 
@@ -128,6 +129,9 @@ if __name__ == '__main__':
 
     logger.info('Starting training')
     lr = args.lr or utils.get_lr(model)
+
+    if args.output_dir is None:
+        args.output_dir = os.path.join('output_dir', next(tempfile._get_candidate_names()))
 
     train_args = transformers.TrainingArguments(
         output_dir=args.output_dir,
