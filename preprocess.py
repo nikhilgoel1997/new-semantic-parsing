@@ -28,13 +28,13 @@ import transformers
 
 from tqdm import tqdm
 
-from new_semantic_parsing import TopSchemaTokenizer
-from new_semantic_parsing import utils
+from new_semantic_parsing import (
+    utils,
+    TopSchemaTokenizer,
+    SAVE_FORMAT_VERSION,
+)
 from new_semantic_parsing.data import PointerDataset
 from new_semantic_parsing.dataclasses import SchemaItem
-
-
-SAVE_FORMAT_VERSION = '0.1-nightly-Jun12'
 
 
 logging.basicConfig(
