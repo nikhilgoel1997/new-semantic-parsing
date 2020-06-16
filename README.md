@@ -1,4 +1,4 @@
-# New Project Template
+# New Semantic Parsing
 
 "This is not an officially supported Google product"
 
