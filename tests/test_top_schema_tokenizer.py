@@ -91,7 +91,7 @@ class TopSchemaTokenizerTest(unittest.TestCase):
         source_tokens = [6, 2, 31, 42, 5]
         # note that TransformersTokenizerMock splits tok6,tok2 into two subtokens
         # note that the vocabulary is sorted
-        expected_ids = [5, 1, 2, 7, 8, 9, 5, 3, 4, 10, 11, 6, 6]
+        expected_ids = [tokenizer.bos_token_id, 7, 3, 4, 9, 10, 11, 7, 5, 6, 12, 13, 8, 8, tokenizer.eos_token_id]
 
         ids = tokenizer.encode(schema_str, source_tokens)
         self.assertSequenceEqual(ids, expected_ids)
@@ -105,7 +105,7 @@ class TopSchemaTokenizerTest(unittest.TestCase):
         schema_str = '[IN:INTENT1 tok6,tok2 tok31 [SL:SLOT1 tok42 tok5 ] ]'
         source_tokens = [TransformersTokenizerMock.cls_token_id, 6, 2, 31, 42, 5]
         # note that TransformersTokenizerMock splits tok6,tok2 into two subtokens
-        expected_ids = [5, 1, 2, 8, 9, 10, 5, 3, 4, 11, 12, 6, 6]
+        expected_ids = [tokenizer.bos_token_id, 7, 3, 4, 10, 11, 12, 7, 5, 6, 13, 14, 8, 8, tokenizer.eos_token_id]
 
         ids = tokenizer.encode(schema_str, source_tokens)
         self.assertSequenceEqual(ids, expected_ids)
@@ -119,7 +119,7 @@ class TopSchemaTokenizerTest(unittest.TestCase):
         # i.e. SLOT1 after tok2 is just a token which is written exactly like a schema word
         schema_str = '[IN:INTENT1 tok6 tok2 SLT1 tok31 [SL:SLOT1 tok42 tok5 ] ]'
         source_tokens = [6, 2, 1, 31, 42, 5]
-        expected_ids = [6, 1, 2, 8, 9, 10, 11, 6, 3, 4, 12, 13, 7, 7]
+        expected_ids = [tokenizer.bos_token_id, 8, 3, 4, 10, 11, 12, 13, 8, 5, 6, 14, 15, 9, 9, tokenizer.eos_token_id]
 
         ids = tokenizer.encode(schema_str, source_tokens)
         self.assertSequenceEqual(ids, expected_ids)
@@ -155,7 +155,7 @@ class TopSchemaTokenizerTest(unittest.TestCase):
         source_tokens = [6, 2, 31, 42, 5]
         # note that TransformersTokenizerMock splits tok6,tok2 into two subtokens
         # note that the vocabulary is sorted
-        expected_ids = [5, 1, 2, 7, 8, 9, 5, 3, 4, 10, 11, 6, 6]
+        expected_ids = [7, 3, 4, 9, 10, 11, 7, 5, 6, 12, 13, 8, 8]
 
         schema_decoded = tokenizer.decode(expected_ids, source_tokens)
 

@@ -27,7 +27,7 @@ from new_semantic_parsing import EncoderDecoderWPointerModel
 from new_semantic_parsing.dataclasses import InputDataClass
 from new_semantic_parsing.schema_tokenizer import TopSchemaTokenizer
 from new_semantic_parsing.utils import compute_metrics
-from new_semantic_parsing.data import PaddedDataCollator
+from new_semantic_parsing.data import PointerDataset, PaddedDataCollator
 
 
 class EncoderDecoderWPointerTest(unittest.TestCase):
@@ -257,22 +257,12 @@ class ModelOverfitTest(unittest.TestCase):
                            (source_ids != tokenizer.cls_token_id) &
                            (source_ids != tokenizer.sep_token_id)).type(torch.FloatTensor)
 
-        class MockDataset(torch.utils.data.Dataset):
-            def __len__(self): return 2
-
-            def __getitem__(self, i):
-                return InputDataClass(**{
-                    'input_ids': source_ids[i],
-                    'attention_mask': source_ids_mask[i],
-                    'decoder_input_ids': schema_batch.input_ids[i],
-                    'decoder_attention_mask': schema_batch.attention_mask[i],
-                    'labels': schema_batch.input_ids[i],
-                })
+        dataset = PointerDataset(source_ids, schema_batch.input_ids, source_ids_mask, schema_batch.attention_mask)
 
         train_args = transformers.TrainingArguments(
             output_dir=self.output_dir,
             do_train=True,
-            num_train_epochs=55,
+            num_train_epochs=300,
             seed=42,
         )
 
@@ -282,9 +272,9 @@ class ModelOverfitTest(unittest.TestCase):
         trainer = transformers.Trainer(
             model,
             train_args,
-            train_dataset=MockDataset(),
+            train_dataset=dataset,
             data_collator=PaddedDataCollator(),
-            eval_dataset=MockDataset(),
+            eval_dataset=dataset,
             compute_metrics=compute_metrics,
         )
         # a trick to reduce the amount of logging
@@ -308,6 +298,7 @@ class ModelOverfitTest(unittest.TestCase):
 
 # this compute_metrics is not compatible with the new_semantic_parsing.Trainer and only used here
 def compute_metrics(eval_prediction: transformers.EvalPrediction):
+    # TODO: make work with padding
     predictions = np.argmax(eval_prediction.predictions, axis=-1)
     accuracy = np.mean(predictions.reshape(-1) == eval_prediction.label_ids.reshape(-1))
     exact_match = np.mean(np.all(predictions == eval_prediction.label_ids, axis=1))

@@ -1,4 +1,4 @@
-# Copyright 2020 Google LLC
+# Copyright 2020 The HuggingFace Inc. team and Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -40,18 +40,34 @@ class TopSchemaTokenizer:
         :param src_text_tokenizer: transformers.PreTrainedTokenizer object
         """
         self.pad_token = '[PAD]'
+        self.bos_token = '[BOS]'
+        self.eos_token = '[EOS]'
 
         self._vocab = schema_vocab
-        self._itos = [self.pad_token] + sorted(schema_vocab)
+        self._itos = [self.pad_token, self.bos_token, self.eos_token] + sorted(schema_vocab)
         self._stoi = {s: i for i, s in enumerate(self._itos)}
-
-        self.pad_token_id = self._stoi[self.pad_token]
 
         self.src_tokenizer = src_text_tokenizer
 
     @property
     def vocab_size(self):
         return len(self._itos)
+
+    @property
+    def pad_token_id(self):
+        return self._stoi[self.pad_token]
+
+    @property
+    def bos_token_id(self):
+        return self._stoi[self.bos_token]
+
+    @property
+    def eos_token_id(self):
+        return self._stoi[self.eos_token]
+
+    @property
+    def special_tokens(self):
+        return [self.pad_token, self.bos_token, self.eos_token]
 
     def encode(self, schema_text, source_ids, max_length=None, pad_to_max_length=False):
         return self.encode_plus(schema_text, source_ids, max_length, pad_to_max_length).ids
@@ -61,7 +77,9 @@ class TopSchemaTokenizer:
         schema_tokens = self.tokenize(schema_text)
 
         if max_length is not None:
-            schema_tokens = schema_tokens[:max_length]
+            schema_tokens = schema_tokens[:max_length - 2]  # minus BOS and EOS
+
+        schema_tokens = [self.bos_token] + schema_tokens + [self.eos_token]
 
         if pad_to_max_length:
             delta = max_length - len(schema_tokens)
@@ -150,8 +168,9 @@ class TopSchemaTokenizer:
         src_tokens_pointer = int(has_cls)
 
         for i, token in enumerate(schema_tokens):
-            token_follows_schema = token in {'[', ']', 'IN:', 'SL:'} or schema_tokens[i-1] in {'IN:', 'SL:'}
-            if token in self._vocab and token_follows_schema:
+            token_follows_schema = (token in {'[', ']', 'IN:', 'SL:', *self.special_tokens}
+                                    or schema_tokens[i-1] in {'IN:', 'SL:'})
+            if token in self._stoi and token_follows_schema:
                 # The reason for second condition are cases when a word from a text exacly equal to the schema word
                 # e.g. "IS THERE A PATH"
                 # PATH is in a schema vocabulary, but not a schema word

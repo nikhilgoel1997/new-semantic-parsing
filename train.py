@@ -30,7 +30,7 @@ from new_semantic_parsing import (
     Trainer,
 )
 from new_semantic_parsing.data import Seq2SeqDataCollator
-from new_semantic_parsing import utils
+from new_semantic_parsing import utils, SAVE_FORMAT_VERSION
 
 
 logging.basicConfig(
@@ -93,6 +93,9 @@ if __name__ == '__main__':
     try:
         with open(data_dir/'args.toml') as f:
             preprocess_args = toml.load(f)
+            if preprocess_args['version'] != SAVE_FORMAT_VERSION:
+                logger.warning('Binary data version differs from the current version. '
+                               'May cause failing and unexpected behavior')
     except FileNotFoundError:
         preprocess_args = None
 
@@ -114,6 +117,7 @@ if __name__ == '__main__':
             intermediate_size=encoder.config.intermediate_size,
             num_hidden_layers=encoder.config.num_hidden_layers,
             num_attention_heads=encoder.config.num_attention_heads,
+            pad_token_id=schema_tokenizer.pad_token_id,
         )
         decoder = transformers.BertModel(decoder_config)
 
@@ -125,6 +129,8 @@ if __name__ == '__main__':
             heads=args.heads,
             src_vocab_size=text_tokenizer.vocab_size,
             tgt_vocab_size=schema_tokenizer.vocab_size,
+            encoder_pad_token_id=text_tokenizer.pad_token_id,
+            decoder_pad_token_id=schema_tokenizer.pad_token_id,
         )
 
     logger.info('Starting training')

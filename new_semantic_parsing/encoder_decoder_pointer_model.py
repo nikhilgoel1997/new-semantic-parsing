@@ -58,6 +58,8 @@ class EncoderDecoderWPointerModel(transformers.EncoderDecoderModel):
         heads,
         src_vocab_size,
         tgt_vocab_size,
+        encoder_pad_token_id=0,
+        decoder_pad_token_id=None,
     ):
         """
         :param layers: number of layers for encoder and for decoder
@@ -65,6 +67,8 @@ class EncoderDecoderWPointerModel(transformers.EncoderDecoderModel):
         :param heads: number of attention heads
         :param src_vocab_size: source vocabulary size
         :param tgt_vocab_size: size of the target vocabulary (excluding pointers)
+        :param encoder_pad_token_id: pad id to ignore in the encoder input
+        :param decoder_pad_token_id: pad id to ignore in the decoder input, equal to encoder_pad_token_id by default
         :return: EncoderDecoderWPointerModel
         """
         encoder_config = transformers.BertConfig(
@@ -73,9 +77,11 @@ class EncoderDecoderWPointerModel(transformers.EncoderDecoderModel):
             vocab_size=src_vocab_size,
             num_hidden_layers=layers,
             num_attention_heads=heads,
+            pad_token_id=encoder_pad_token_id,
         )
         encoder = transformers.BertModel(encoder_config)
 
+        decoder_pad_token_id = decoder_pad_token_id or encoder_pad_token_id
         decoder_config = transformers.BertConfig(
             hidden_size=hidden,
             intermediate_size=4 * hidden,
@@ -83,6 +89,7 @@ class EncoderDecoderWPointerModel(transformers.EncoderDecoderModel):
             is_decoder=True,
             num_hidden_layers=layers,
             num_attention_heads=heads,
+            pad_token_id=decoder_pad_token_id,
         )
         decoder = transformers.BertModel(decoder_config)
 
@@ -172,6 +179,7 @@ class EncoderDecoderWPointerModel(transformers.EncoderDecoderModel):
             pointer_mask, attention_scores.shape,
         )
         attention_scores = attention_scores + pointer_mask
+        # attention_scores = attention_scores * attention_scores.shape[-1] ** -0.5
 
         # NOTE: maybe add some kind of normalization between dec_logits?
         decoder_logits = self.lm_head(decoder_hidden_states)  # (bs, tgt_len, tgt_vocab_size)
@@ -180,11 +188,15 @@ class EncoderDecoderWPointerModel(transformers.EncoderDecoderModel):
         if labels is None:
             return (combined_logits,) + decoder_outputs + encoder_outputs
 
-        loss = F.cross_entropy(
-            combined_logits.view(-1, combined_logits.shape[-1]),
-            labels.view(-1)
-        )
+        loss = self._compute_loss(combined_logits, labels)
         return (loss, combined_logits) + decoder_outputs + encoder_outputs
+
+    def _compute_loss(self, input, target):
+        return F.cross_entropy(
+            input.view(-1, input.shape[-1]),
+            target.view(-1),
+            ignore_index=self.decoder.embeddings.word_embeddings.padding_idx
+        )
 
     def _get_pointer_attention_mask(self, pointer_attention_mask=None, shape=None, device=None, dtype=None):
         """
