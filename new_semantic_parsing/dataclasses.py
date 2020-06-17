@@ -34,3 +34,4 @@ class SchemaItem:
 class Seq2SeqEvalPrediciton:
     predictions: List[np.ndarray]
     label_ids: List[np.ndarray]
+    label_masks: List[np.ndarray] = None

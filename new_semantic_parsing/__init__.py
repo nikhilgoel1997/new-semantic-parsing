@@ -13,8 +13,8 @@
 # limitations under the License.
 # =============================================================================
 
-SAVE_FORMAT_VERSION = '0.1-nightly-Jun15'
+SAVE_FORMAT_VERSION = '0.1-nightly-Jun16'
 
 from .encoder_decoder_pointer_model import EncoderDecoderWPointerModel
 from .schema_tokenizer import TopSchemaTokenizer
-from .trainer import Trainer
+from .seq2seqtrainer import Seq2SeqTrainer

@@ -1,12 +1,99 @@
 import torch
 import transformers
 
-from new_semantic_parsing.dataclasses import InputDataClass
+from new_semantic_parsing.dataclasses import InputDataClass, List, Tensor
+
+
+class PointerDataset(torch.utils.data.Dataset):
+    def __init__(self, source_tensors, target_tensors=None, source_pointer_masks=None, target_pointer_masks=None):
+        """
+        Stores tensors and makes labels as shifted target_tensors
+
+        :param source_tensors: list of tensors, input ids
+        :param target_tensors: list of tensors, labels
+        :param source_pointer_masks: list of tensors, mask for the pointer network
+                                     does not allow to point to padding, cls and sep
+        :param target_pointer_masks: list of tensors, mask showing pointer locations in labels
+        :param source_attention_masks: list of tensors, padding mask (0 means padding)
+        :param target_attention_masks: list of tensors, padding mask (0 means padding)
+        """
+        self.source_tensors = source_tensors
+        self.target_tensors = target_tensors
+        self.source_pointer_masks = source_pointer_masks
+        self.target_pointer_masks = target_pointer_masks
+
+        if source_tensors is None:
+            raise ValueError('source_tensors cannot be None')
+
+        self.torchified = all(map(self._check_torchified, [
+            source_tensors, source_pointer_masks, target_tensors, target_pointer_masks,
+        ]))
+
+    def __len__(self):
+        return len(self.source_tensors)
+
+    def __getitem__(self, item) -> InputDataClass:
+        source_pointer_mask = None
+        if self.source_pointer_masks is not None:
+            source_pointer_mask = self.source_pointer_masks[item]
+
+        if self.target_tensors is None:
+            return InputDataClass(
+                input_ids=self.source_tensors[item],
+                pointer_mask=source_pointer_mask,
+            )
+
+        target_pointer_mask = None
+        if self.target_pointer_masks is not None:
+            target_pointer_mask = self.target_pointer_masks[item][:-1]
+
+        return InputDataClass(
+            input_ids=self.source_tensors[item],
+            pointer_mask=source_pointer_mask,
+            decoder_input_ids=self.target_tensors[item][:-1],
+            decoder_pointer_mask=target_pointer_mask,
+            labels=self.target_tensors[item][1:],
+        )
+
+    @staticmethod
+    def _check_torchified(x: List[Tensor]):
+        if x is None:
+            return True
+        return isinstance(x[0], torch.Tensor)
+
+    def torchify(self):
+        """Make all tensors torch.Tensor"""
+        if self.torchified:
+            return
+
+        self.source_tensors = [torch.LongTensor(t) for t in self.source_tensors]
+        if self.source_pointer_masks is not None:
+            self.source_pointer_masks = [torch.FloatTensor(t) for t in self.source_pointer_masks]
+
+        if self.target_tensors is not None:
+            self.target_tensors = [torch.LongTensor(t) for t in self.target_tensors]
+        if self.target_pointer_masks is not None:
+            self.target_pointer_masks = [torch.FloatTensor(t) for t in self.target_pointer_masks]
+
+        self.torchified = True
+
+    def get_max_len(self):
+        """Get maximum length of source sequences and target sequences in the dataset
+        Returns a tuple (source_max_len, target_max_len)
+        if target_tensors is None, target_max_len is also None
+        """
+        source_max_len = max(len(t) for t in self.source_tensors)
+        if self.target_tensors is None:
+            return source_max_len, None
+
+        target_max_len = max(len(t) for t in self.target_tensors)
+        return source_max_len, target_max_len
 
 
 class Seq2SeqDataCollator(transformers.DataCollator):
     """Pads tensors to the maximum length in batch.
     Length is different for encoder and decoder inputs.
+    Also makes padding masks.
 
     Decoder inputs should have prefix `decoder_`
     `labels` considered a decoder field too
@@ -23,8 +110,8 @@ class Seq2SeqDataCollator(transformers.DataCollator):
 
     def collate_batch(self, examples):
         """
-        :param examples: list of DataClass
-        :return: dict with the DataClass fields
+        :param examples: list of InputDataClass
+        :return: dict with the InputDataClass fields
         """
         batch = dict()
         batch_size = len(examples)
@@ -54,6 +141,14 @@ class Seq2SeqDataCollator(transformers.DataCollator):
                 if tensor is None: continue
                 batch[k][i, :len(tensor)] = tensor
 
+            if example.attention_mask is None:
+                batch['attention_mask'] = batch['input_ids'] != self.encoder_pad_id
+
+            has_decoder_inputs = example.decoder_input_ids is not None
+            has_decoder_mask = example.decoder_attention_mask is not None
+            if has_decoder_inputs and not has_decoder_mask:
+                batch['decoder_attention_mask'] = batch['decoder_input_ids'] != self.decoder_pad_id
+
         return batch
 
     @staticmethod
@@ -68,91 +163,3 @@ class Seq2SeqDataCollator(transformers.DataCollator):
         else:
             if self._encoder_max_len is not None and self._encoder_max_len != maxlen:
                 raise ValueError(f'encoder input tensors have different lengths({key})')
-
-
-class PaddedDataCollator(transformers.DataCollator):
-    """This data collator assumes that all examples are padded to the same length"""
-    def collate_batch(self, examples):
-        batch = dict()
-
-        for k, v in vars(examples[0]).items():
-            if v is None:
-                continue
-            batch[k] = torch.stack([getattr(ex, k) for ex in examples])
-
-        return batch
-
-
-class PointerDataset(torch.utils.data.Dataset):
-    def __init__(self, source_tensors, target_tensors=None, source_pointer_masks=None, target_pointer_masks=None):
-        """
-        :param source_tensors: list of tensors, input ids
-        :param target_tensors: list of tensors, labels
-        :param target_pointer_masks: list of tensors, mask showing pointer locations in labels
-        """
-        self.source_tensors = source_tensors
-        self.target_tensors = target_tensors
-        self.target_pointer_masks = target_pointer_masks
-        self.source_pointer_masks = source_pointer_masks
-
-        self.torchified = isinstance(source_tensors[0], torch.Tensor)
-        if target_tensors is not None:
-            self.torchified = self.torchified and isinstance(target_tensors[0], torch.Tensor)
-        if source_pointer_masks is not None:
-            self.torchified = self.torchified and isinstance(source_pointer_masks[0], torch.Tensor)
-        if target_pointer_masks is not None:
-            self.torchified = self.torchified and isinstance(target_pointer_masks[0], torch.Tensor)
-
-    def __len__(self):
-        return len(self.source_tensors)
-
-    def __getitem__(self, item) -> InputDataClass:
-        source_pointer_mask = None
-        if self.source_pointer_masks is not None:
-            source_pointer_mask = self.source_pointer_masks[item]
-
-        if self.target_tensors is None:
-            return InputDataClass(
-                input_ids=self.source_tensors[item],
-                pointer_mask=source_pointer_mask,
-            )
-
-        target_pointer_mask = None
-        if self.target_pointer_masks is not None:
-            target_pointer_mask = self.target_pointer_masks[item][:-1]
-
-        return InputDataClass(
-            input_ids=self.source_tensors[item],
-            pointer_mask=source_pointer_mask,
-            decoder_input_ids=self.target_tensors[item][:-1],
-            decoder_pointer_mask=target_pointer_mask,
-            labels=self.target_tensors[item][1:],
-        )
-
-    def torchify(self):
-        """Make all tensors torch.Tensor"""
-        if self.torchified:
-            return
-
-        self.source_tensors = [torch.LongTensor(t) for t in self.source_tensors]
-
-        if self.target_tensors is not None:
-            self.target_tensors = [torch.LongTensor(t) for t in self.target_tensors]
-        if self.source_pointer_masks is not None:
-            self.source_pointer_masks = [torch.FloatTensor(t) for t in self.source_pointer_masks]
-        if self.target_pointer_masks is not None:
-            self.target_pointer_masks = [torch.FloatTensor(t) for t in self.target_pointer_masks]
-
-        self.torchified = True
-
-    def get_max_len(self):
-        """Get maximum length of source sequences and target sequences in the dataset
-        Returns a tuple (source_max_len, target_max_len)
-        if target_tensors is None, target_max_len is also None
-        """
-        source_max_len = max(len(t) for t in self.source_tensors)
-        if self.target_tensors is None:
-            return source_max_len, None
-
-        target_max_len = max(len(t) for t in self.target_tensors)
-        return source_max_len, target_max_len

@@ -27,7 +27,7 @@ import transformers
 from new_semantic_parsing import (
     EncoderDecoderWPointerModel,
     TopSchemaTokenizer,
-    Trainer,
+    Seq2SeqTrainer,
 )
 from new_semantic_parsing.data import Seq2SeqDataCollator
 from new_semantic_parsing import utils, SAVE_FORMAT_VERSION
@@ -161,7 +161,7 @@ if __name__ == '__main__':
     collator = Seq2SeqDataCollator(text_tokenizer.pad_token_id, schema_tokenizer.pad_token_id)
 
     os.environ["WANDB_PROJECT"] = args.wandb_project or "new_semantic_parsing"
-    trainer = Trainer(
+    trainer = Seq2SeqTrainer(
         model,
         train_args,
         train_dataset=train_dataset,

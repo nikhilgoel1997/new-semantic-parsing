@@ -90,66 +90,6 @@ class TopSchemaTokenizer:
 
         return item
 
-    def batch_encode_plus(
-        self,
-        batch_schema_text,
-        batch_source_ids,
-        max_length=None,
-        pad_to_max_length=True,
-        return_tensors=None,
-        device='cpu',
-    ) -> InputDataClass:
-        # NOTE: this method really doing the same thing as the pipeline in preprocess.py
-        # probably, we need to reduce code duplication
-        # TODO: add text pointer mask computation?
-        assert pad_to_max_length, "Not padding to max length is not supported"
-
-        batch_size = len(batch_schema_text)
-        batch_items = []
-
-        for schema_text, source_ids in zip(batch_schema_text, batch_source_ids):
-            item = self.encode_plus(schema_text, source_ids, max_length)
-            batch_items.append(item)
-
-        if max_length is None:
-            max_length = max(len(t) for t in batch_items)
-
-        batch_ids_padded = np.full([batch_size, max_length], self.pad_token_id, dtype=np.int32)
-        batch_schema_masks = np.zeros([batch_size, max_length])
-        padding_masks = np.ones([batch_size, max_length])
-        for j, item in enumerate(batch_items):
-            ids = item.ids
-            schema_mask = item.pointer_mask
-
-            difference = max_length - len(item)
-            if difference > 0:
-                ids = ids + [self.pad_token_id] * difference
-                schema_mask = schema_mask + [0] * difference
-                padding_masks[j, -difference:] = 0.
-
-            if difference < 0:
-                ids = ids[:max_length]
-                schema_mask = schema_mask[:max_length]
-
-            batch_ids_padded[j] = ids
-            batch_schema_masks[j] = schema_mask
-
-        if return_tensors is None:
-            return InputDataClass(
-                input_ids=batch_ids_padded,
-                attention_mask=padding_masks,
-                decoder_pointer_mask=batch_schema_masks,
-            )
-
-        if return_tensors == 'pt':
-            return InputDataClass(
-                input_ids=torch.LongTensor(batch_ids_padded, device=device),
-                attention_mask=torch.FloatTensor(padding_masks, device=device),
-                decoder_pointer_mask=torch.FloatTensor(batch_schema_masks, device=device),
-            )
-
-        raise ValueError('`return_tensors` can be eigher None or "pt"')
-
     def convert_tokens_to_ids(self, schema_tokens, src_token_ids) -> SchemaItem:
         """
         :param schema_tokens: string

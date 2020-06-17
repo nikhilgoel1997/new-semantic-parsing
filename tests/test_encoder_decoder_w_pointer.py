@@ -23,11 +23,10 @@ import torch
 import transformers
 import numpy as np
 
-from new_semantic_parsing import EncoderDecoderWPointerModel
-from new_semantic_parsing.dataclasses import InputDataClass
+from new_semantic_parsing import EncoderDecoderWPointerModel, Seq2SeqTrainer
 from new_semantic_parsing.schema_tokenizer import TopSchemaTokenizer
-from new_semantic_parsing.utils import compute_metrics
-from new_semantic_parsing.data import PointerDataset, PaddedDataCollator
+from new_semantic_parsing.utils import compute_metrics, get_src_pointer_mask
+from new_semantic_parsing.data import PointerDataset, Seq2SeqDataCollator
 
 
 class EncoderDecoderWPointerTest(unittest.TestCase):
@@ -223,8 +222,7 @@ class ModelOverfitTest(unittest.TestCase):
         random.seed(42)
         torch.manual_seed(42)
         np.random.seed(42)
-        # NOTE: the test is still not deterministic
-        # NOTE: very long test, takes about ~10 seconds
+        # NOTE: test takes about ~10 seconds
 
         tokenizer = transformers.AutoTokenizer.from_pretrained('distilbert-base-uncased')
 
@@ -246,34 +244,37 @@ class ModelOverfitTest(unittest.TestCase):
             '[IN:GET_DIRECTIONS Get directions to [SL:DESTINATION Mountain View]]'
         ]
 
-        source_ids = tokenizer.batch_encode_plus(source_texts, pad_to_max_length=True)['input_ids']
+        source_ids = [tokenizer.encode(t) for t in source_texts]
+        source_pointer_masks = [get_src_pointer_mask(i, tokenizer) for i in source_ids]
 
-        schema_batch = schema_tokenizer.batch_encode_plus(
-            schema_texts, source_ids, pad_to_max_length=True, return_tensors='pt'
-        )
+        schema_ids = []
+        schema_pointer_masks = []
 
-        source_ids = torch.LongTensor(source_ids)
-        source_ids_mask = ((source_ids != tokenizer.pad_token_id) &
-                           (source_ids != tokenizer.cls_token_id) &
-                           (source_ids != tokenizer.sep_token_id)).type(torch.FloatTensor)
+        for src_id, schema in zip(source_ids, schema_texts):
+            item = schema_tokenizer.encode_plus(schema, src_id)
+            schema_ids.append(item.ids)
+            schema_pointer_masks.append(item.pointer_mask)
 
-        dataset = PointerDataset(source_ids, schema_batch.input_ids, source_ids_mask, schema_batch.attention_mask)
+        dataset = PointerDataset(source_ids, schema_ids, source_pointer_masks, schema_pointer_masks)
+        dataset.torchify()
 
         train_args = transformers.TrainingArguments(
             output_dir=self.output_dir,
             do_train=True,
-            num_train_epochs=300,
+            num_train_epochs=70,
             seed=42,
         )
 
         # doesn't work, need to patch transformers
-        # os.environ["WANDB_DISABLED"] = "true"
-        # os.environ["WANDB_WATCH"] = "false"
-        trainer = transformers.Trainer(
+        os.environ["WANDB_DISABLED"] = "true"
+        os.environ["WANDB_WATCH"] = "false"
+        transformers.trainer.is_wandb_available = lambda: False  # workaround
+
+        trainer = Seq2SeqTrainer(
             model,
             train_args,
             train_dataset=dataset,
-            data_collator=PaddedDataCollator(),
+            data_collator=Seq2SeqDataCollator(model.encoder.embeddings.word_embeddings.padding_idx),
             eval_dataset=dataset,
             compute_metrics=compute_metrics,
         )
@@ -294,16 +295,3 @@ class ModelOverfitTest(unittest.TestCase):
 
         # accuracy should be 1.0 and eval loss should be around 0.9
         self.assertGreater(eval_out['eval_accuracy'], 0.99)
-
-
-# this compute_metrics is not compatible with the new_semantic_parsing.Trainer and only used here
-def compute_metrics(eval_prediction: transformers.EvalPrediction):
-    # TODO: make work with padding
-    predictions = np.argmax(eval_prediction.predictions, axis=-1)
-    accuracy = np.mean(predictions.reshape(-1) == eval_prediction.label_ids.reshape(-1))
-    exact_match = np.mean(np.all(predictions == eval_prediction.label_ids, axis=1))
-
-    return {
-        'accuracy': accuracy,
-        'exact_match': exact_match,
-    }
