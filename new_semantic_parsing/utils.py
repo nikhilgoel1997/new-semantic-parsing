@@ -45,8 +45,15 @@ def compute_metrics(eval_prediction: Seq2SeqEvalPrediciton):
     predictions = [np.argmax(p, axis=-1) for p in eval_prediction.predictions]
     labels = eval_prediction.label_ids
 
-    accuracy = sum(np.sum(p == l) for p, l in zip(predictions, labels)) / sum(len(p) for p in predictions)
-    exact_match = sum(np.all(p == l) for p, l in zip(predictions, labels)) / len(predictions)
+    label_masks = eval_prediction.label_masks or [np.ones_like(p) for p in predictions]
+
+    total_tokens = sum(np.sum(m) for m in label_masks)
+    # (p == l) & (1 ^ m) <=> correct tokens which are not masked (masked tokens have mask == 0)
+    correct_tokens = sum(np.sum((p == l) & m) for p, l, m in zip(predictions, labels, label_masks))
+    accuracy = correct_tokens / total_tokens
+
+    # (p == l) | (1 ^ m) <=> correct tokens or masked tokens (masked tokens have mask == 0)
+    exact_match = sum(np.all((p == l) | (1 ^ m)) for p, l, m in zip(predictions, labels, label_masks)) / len(predictions)
 
     return {
         'accuracy': accuracy,

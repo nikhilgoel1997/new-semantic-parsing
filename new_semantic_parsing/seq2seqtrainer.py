@@ -29,6 +29,8 @@ from transformers.training_args import is_tpu_available
 
 import transformers
 
+from new_semantic_parsing.dataclasses import Seq2SeqEvalPrediciton
+
 
 if is_tpu_available():
     import torch_xla.core.xla_model as xm
@@ -39,7 +41,7 @@ if is_tpu_available():
 logger = logging.getLogger(__name__)
 
 
-class Trainer(transformers.Trainer):
+class Seq2SeqTrainer(transformers.Trainer):
     def _prediction_loop(
         self, dataloader: DataLoader, description: str, prediction_loss_only: Optional[bool] = None
     ) -> PredictionOutput:
@@ -61,19 +63,20 @@ class Trainer(transformers.Trainer):
         # inside a DistributedDataParallel as we'll be under `no_grad` anyways.
 
         batch_size = dataloader.batch_size
-        logger.info("***** Running %s *****", description)
-        logger.info("  Num examples = %d", self.num_examples(dataloader))
-        logger.info("  Batch size = %d", batch_size)
+        logger.info('***** Running %s *****', description)
+        logger.info('  Num examples = %d', self.num_examples(dataloader))
+        logger.info('  Batch size = %d', batch_size)
         eval_losses: List[float] = []
         preds: List[torch.Tensor] = None
         label_ids: List[torch.Tensor] = None
+        label_masks: List[torch.Tensor] = []
         model.eval()
 
         if is_tpu_available():
             dataloader = pl.ParallelLoader(dataloader, [self.args.device]).per_device_loader(self.args.device)
 
         for inputs in tqdm(dataloader, desc=description):
-            has_labels = any(inputs.get(k) is not None for k in ["labels", "lm_labels", "masked_lm_labels"])
+            has_labels = any(inputs.get(k) is not None for k in ['labels', 'lm_labels', 'masked_lm_labels'])
 
             for k, v in inputs.items():
                 inputs[k] = v.to(self.args.device)
@@ -91,43 +94,51 @@ class Trainer(transformers.Trainer):
                     preds = list(logits.detach().unbind())
                 else:
                     preds += list(logits.detach().unbind())
-                if inputs.get("labels") is not None:
+                if inputs.get('labels') is not None:
                     if label_ids is None:
-                        label_ids = list(inputs["labels"].detach().unbind())
+                        label_ids = list(inputs['labels'].detach().unbind())
                     else:
-                        label_ids += list(inputs["labels"].detach().unbind())
+                        label_ids += list(inputs['labels'].detach().unbind())
+
+                    label_mask = inputs.get('decoder_attention_mask', None)
+                    if label_mask is not None:
+                        label_masks += list(label_mask.detach().unbind())
 
         if self.args.local_rank != -1:
-            raise NotImplementedError('Variable-length output is not supported')
+            raise NotImplementedError('Variable-length output is not supported in distributed mode')
             # In distributed mode, concatenate all results from all nodes:
             if preds is not None:
                 preds = self.distributed_concat(preds, num_total_examples=self.num_examples(dataloader))
             if label_ids is not None:
                 label_ids = self.distributed_concat(label_ids, num_total_examples=self.num_examples(dataloader))
         elif is_tpu_available():
-            raise NotImplementedError('Variable-length output is not supported')
+            raise NotImplementedError('Variable-length output is not supported with TPU')
             # tpu-comment: Get all predictions and labels from all worker shards of eval dataset
             if preds is not None:
-                preds = xm.mesh_reduce("eval_preds", preds, torch.cat)
+                preds = xm.mesh_reduce('eval_preds', preds, torch.cat)
             if label_ids is not None:
-                label_ids = xm.mesh_reduce("eval_label_ids", label_ids, torch.cat)
+                label_ids = xm.mesh_reduce('eval_label_ids', label_ids, torch.cat)
 
         # Finally, turn the aggregated tensors into numpy arrays.
         if preds is not None:
             preds = [p.cpu().numpy() for p in preds]
         if label_ids is not None:
             label_ids = [l.cpu().numpy() for l in label_ids]
+        if label_masks:
+            label_masks = [l.cpu().numpy() for l in label_masks]
 
         if self.compute_metrics is not None and preds is not None and label_ids is not None:
-            metrics = self.compute_metrics(EvalPrediction(predictions=preds, label_ids=label_ids))
+            metrics = self.compute_metrics(
+                Seq2SeqEvalPrediciton(predictions=preds, label_ids=label_ids, label_masks=label_masks)
+            )
         else:
             metrics = {}
         if len(eval_losses) > 0:
-            metrics["eval_loss"] = np.mean(eval_losses)
+            metrics['eval_loss'] = np.mean(eval_losses)
 
         # Prefix all keys with eval_
         for key in list(metrics.keys()):
-            if not key.startswith("eval_"):
-                metrics[f"eval_{key}"] = metrics.pop(key)
+            if not key.startswith('eval_'):
+                metrics[f'eval_{key}'] = metrics.pop(key)
 
         return PredictionOutput(predictions=preds, label_ids=label_ids, metrics=metrics)
