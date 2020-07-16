@@ -1,58 +1,56 @@
 set -e
 cd ..
 
+DATA=data-bin/top_path01_jul15
+MODEL=output_dir/get_path01_jul15_bert_run
+CLASSES=data/splits/path_related.tsv
+TAG=path1_bert
+
 
 python cli/preprocess.py \
   --data data/top-dataset-semantic-parsing \
   --text-tokenizer bert-base-cased \
-  --output-dir data-bin/top_jul13 \
-  --split-class IN:GET_LOCATION \
-  --split-amount 0.5 \
+  --output-dir $DATA \
+  --split-class SL:PATH \
+  --split-amount 0.99 \
 
 
 python cli/train_lightning.py \
-  --data-dir data-bin/top_jul13 \
+  --data-dir $DATA  \
   --encoder-model bert-base-cased \
   --decoder-lr 0.2 \
   --encoder-lr 0.02 \
-  --batch-size 128 \
-  --gradient-accumulation-steps 2 \
+  --batch-size 192 \
   --layers 4 \
   --hidden 256 \
   --dropout 0.3 \
   --heads 4 \
-  --label-smoothing 0.2 \
+  --label-smoothing 0.1 \
   --epochs 100 \
   --warmup-steps 1500 \
   --num-frozen-encoder-steps 500 \
-  --log-every 500 \
+  --log-every 150 \
   --early-stopping 10 \
-  --output-dir output_dir/jul13_run \
+  --output-dir $MODEL \
+  --new-classes-file $CLASSES \
+  --tag train \
 
 
-for subsample in 0.1 0.3 0.5 0.7 0.9
+for subsample in 0.1 0.3 0.5 1.0
 do
 
     python cli/retrain.py \
-      --data-dir data-bin/top_jul13 \
-      --output-dir "output_dir/top_jul13_retrain_$subsample" \
-      --model-dir output_dir/jul13_run \
-      --lr 0.2 \
-      --batch-size 128 \
-      --gradient-accumulation-steps 2 \
-      --dropout 0.3 \
+      --data-dir $DATA \
+      --model-dir $MODEL \
+      --batch-size 192 \
+      --dropout 0.1 \
       --label-smoothing 0.2 \
       --epochs 50 \
-      --warmup-steps 500 \
-      --num-frozen-encoder-steps 300 \
-      --log-every 50 \
+      --log-every 5 \
       --new-data-amount $subsample \
-      --early-stopping 5 \
+      --new-classes-file $CLASSES \
+      --early-stopping 10 \
+      --tag $TAG \
 
 
 done
-
-#python cli/predict.py \
-#  --data data/top-dataset-semantic-parsing/test.tsv \
-#  --model output_dir/jul10_run \
-#  --output-file output_dir/jul10_run/test_predictions.tsv \
