@@ -1,3 +1,17 @@
+# Copyright 2020 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# =============================================================================
 import unittest
 
 import torch
@@ -70,15 +84,10 @@ class LightningModuleTest(unittest.TestCase):
         out = self.module.training_step(batch=self.test_batch, batch_idx=0)
 
         loss = out["loss"]
-        logged_loss = out["log"]["loss"]
-        self.assertTrue(torch.isclose(loss, logged_loss))
         self.assertIsInstance(loss, torch.FloatTensor)
 
     def test_validation_step(self):
         out = self.module.validation_step(batch=self.test_batch, batch_idx=0)
-
-        self.assertIsInstance(out["eval_loss"], torch.FloatTensor)
-        self.assertIsInstance(out["eval_accuracy"], torch.FloatTensor)
         self.assertIsInstance(out["eval_exact_match"], torch.FloatTensor)
 
     def test_validation_epoch_end(self):
@@ -92,10 +101,7 @@ class LightningModuleTest(unittest.TestCase):
 
         out = self.module.validation_epoch_end(validation_step_outputs)
 
-        validation_loss = out["eval_loss"]
         logs = out["log"]
-
-        self.assertTrue(torch.isclose(validation_loss, logs["eval_loss"]))
 
         self.assertTrue(torch.isclose(logs["eval_loss"], torch.tensor(1.0)))
         self.assertTrue(torch.isclose(logs["eval_accuracy"], torch.tensor(0.7)))

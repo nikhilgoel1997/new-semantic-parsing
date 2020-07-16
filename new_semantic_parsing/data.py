@@ -13,10 +13,14 @@
 # limitations under the License.
 # =============================================================================
 """Elements of data feeding pipeline - torch Dataset and collator"""
-
+import numpy as np
+import pandas as pd
 import torch
+from tqdm.auto import tqdm
 
+from new_semantic_parsing.schema_tokenizer import TopSchemaTokenizer
 from new_semantic_parsing.dataclasses import InputDataClass, List, Tensor, PairItem
+from new_semantic_parsing.utils import get_src_pointer_mask
 
 
 class PointerDataset(torch.utils.data.Dataset):
@@ -208,3 +212,36 @@ class Seq2SeqDataCollator:
         else:
             if self._encoder_max_len is not None and self._encoder_max_len != maxlen:
                 raise ValueError(f"encoder input tensors have different lengths({key})")
+
+
+def make_dataset(filepath, schema_tokenizer: TopSchemaTokenizer):
+    data = pd.read_table(filepath, names=["text", "tokens", "schema"])
+
+    pairs = [
+        schema_tokenizer.encode_pair(schema, text)
+        for text, schema in tqdm(zip(data.tokens, data.schema), total=len(data.tokens))
+    ]
+
+    dataset = PointerDataset.from_pair_items(pairs)
+    dataset.torchify()
+
+    return dataset
+
+
+def make_test_dataset(filepath, schema_tokenizer: TopSchemaTokenizer, max_len=None):
+    data = pd.read_table(filepath, names=["text", "tokens", "schema"])
+
+    text_ids: List[list] = [
+        schema_tokenizer.encode_source(text) for text in tqdm(data.tokens, desc="tokenization")
+    ]
+    if max_len is not None:
+        text_ids = [t[:max_len] for t in text_ids]
+
+    text_pointer_masks: List[np.ndarray] = [
+        get_src_pointer_mask(t, schema_tokenizer.src_tokenizer) for t in text_ids
+    ]
+
+    dataset = PointerDataset(source_tensors=text_ids, source_pointer_masks=text_pointer_masks)
+    dataset.torchify()
+
+    return dataset

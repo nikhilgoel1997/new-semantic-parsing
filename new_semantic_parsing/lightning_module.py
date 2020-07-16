@@ -21,9 +21,9 @@ import torch
 from torch.utils.data import DataLoader
 from pytorch_lightning import LightningModule
 
-from new_semantic_parsing import utils
-from new_semantic_parsing.optimization import get_optimizers
 from new_semantic_parsing.data import PointerDataset, Seq2SeqDataCollator
+from new_semantic_parsing.metrics import compute_metrics_from_batch, get_tree_path_metrics
+from new_semantic_parsing.optimization import get_optimizers
 from new_semantic_parsing.schema_tokenizer import TopSchemaTokenizer
 from new_semantic_parsing.modeling_encoder_decoder_wpointer import EncoderDecoderWPointerModel
 
@@ -62,6 +62,7 @@ class PointerModule(LightningModule):
         num_frozen_encoder_steps=0,
         test_dataset=None,
         log_every=50,
+        monitor_classes=None,
     ):
         super().__init__()
         self.model = model
@@ -80,22 +81,26 @@ class PointerModule(LightningModule):
         self.num_frozen_encoder_steps = num_frozen_encoder_steps
         self.adam_eps = adam_eps
         self.log_every = log_every
+        self.monitor_classes = monitor_classes
 
         self._collator = Seq2SeqDataCollator(
             pad_id=self.text_tokenizer.pad_token_id,
             decoder_pad_id=self.schema_tokenizer.pad_token_id,
         )
 
+        # required for ability to load the checkpoint
+        self.save_hyperparameters()
+
     def forward(self, *args, **kwargs):
-        """Coincides with EncoderDecoderWPointerModel.forward"""
+        """Coinsides with EncoderDecoderWPointerModel.forward"""
         return self.model.forward(*args, **kwargs)
 
     def training_step(self, batch, batch_idx):
         outputs = self(**batch)
         loss = outputs[0]
 
-        if batch_idx % self.log_every != 0:
-            return {"loss": loss}
+        if self.log_every == 0 or (self.global_step % self.log_every != 0):
+            return {"loss": loss, "log": {"loss": loss}}
 
         logits = outputs[1]
         preds = logits.max(-1).indices
@@ -104,14 +109,36 @@ class PointerModule(LightningModule):
         label_masks = batch["decoder_attention_mask"]
 
         stop_token_ids = [self.schema_tokenizer.eos_token_id, self.schema_tokenizer.pad_token_id]
-        metrics = utils.compute_metrics_from_batch(preds, labels, label_masks, stop_token_ids)
+        batch_metrics = compute_metrics_from_batch(preds, labels, label_masks, stop_token_ids)
+        batch_metrics = {f"train_batch_{k}": v for k, v in batch_metrics.items()}
 
-        log_dict = {
-            "loss": loss,
-            "train_batch_accuracy": metrics["accuracy"],
-            "train_batch_exact_match": metrics["exact_match"],
-        }
-        return {"loss": loss, "log": log_dict}
+        # tree path metrics
+        pred_ids = preds.detach().unbind()
+        target_ids = labels.detach().unbind()
+
+        pred_tokens = [self.schema_tokenizer.decode(p, return_tokens=True) for p in pred_ids]
+        true_tokens = [self.schema_tokenizer.decode(t, return_tokens=True) for t in target_ids]
+
+        tree_metrics = get_tree_path_metrics(
+            pred_tokens, true_tokens, self.monitor_classes, "train_batch"
+        )
+
+        log_dict = {"loss": loss, **batch_metrics, **tree_metrics}
+        log_dict = {k: self._maybe_torchify(v) for k, v in log_dict.items()}
+
+        return {"loss": loss, "aggregate_log": log_dict}
+
+    def training_epoch_end(self, outputs):
+        # extract log_dict from outputs and ignore the outputs from no-log iterations
+        aggregate_output = [x["aggregate_log"] for x in outputs if ("aggregate_log" in x)]
+        if len(aggregate_output) == 0:
+            return {}
+
+        avg_log = self._average_logs(aggregate_output)
+
+        # do not log average apoch loss to the same place as in-batch loss
+        avg_log["epoch_loss"] = avg_log.pop("loss")
+        return {"log": avg_log}
 
     def configure_optimizers(self):
         optimizer, scheduler = get_optimizers(
@@ -141,32 +168,54 @@ class PointerModule(LightningModule):
     # --- Validation
 
     def validation_step(self, batch, batch_idx):
-        outputs = self.model(**batch)
-        loss = outputs[0]
+        prediction_batch: torch.LongTensor = self.model.generate(
+            input_ids=batch["input_ids"].to(self.device),
+            pointer_mask=batch["pointer_mask"].to(self.device),
+            attention_mask=batch["attention_mask"].to(self.device),
+            max_length=68,
+            num_beams=1,
+            pad_token_id=self.text_tokenizer.pad_token_id,
+            bos_token_id=self.schema_tokenizer.bos_token_id,
+            eos_token_id=self.schema_tokenizer.eos_token_id,
+        )
 
-        logits = outputs[1]
-        preds = logits.max(-1).indices
+        pred_ids = []
+        target_ids = []
 
-        labels = batch["labels"]
-        label_masks = batch["decoder_attention_mask"]
+        for i, prediction in enumerate(prediction_batch):
+            prediction = [
+                p for p in prediction.cpu().numpy() if p not in self.schema_tokenizer.special_ids
+            ]
+            pred_ids.append(prediction)
 
-        stop_token_ids = [self.schema_tokenizer.eos_token_id, self.schema_tokenizer.pad_token_id]
-        metrics = utils.compute_metrics_from_batch(preds, labels, label_masks, stop_token_ids)
+            target = [
+                p
+                for p in batch["decoder_input_ids"][i].cpu().numpy()
+                if p not in self.schema_tokenizer.special_ids
+            ]
+            target_ids.append(target)
 
-        return {
-            "eval_loss": loss,
-            "eval_accuracy": metrics["accuracy"],
-            "eval_exact_match": metrics["exact_match"],
+        exact_match = sum(int(str(p) == str(l)) for p, l in zip(pred_ids, target_ids))
+        exact_match /= len(target_ids)
+
+        pred_tokens = [self.schema_tokenizer.decode(p, return_tokens=True) for p in pred_ids]
+        true_tokens = [self.schema_tokenizer.decode(t, return_tokens=True) for t in target_ids]
+
+        tree_metrics = get_tree_path_metrics(
+            pred_tokens, true_tokens, self.monitor_classes, "eval"
+        )
+
+        log_dict = {
+            "eval_exact_match": exact_match,
+            **tree_metrics,
         }
 
+        log_dict = {k: self._maybe_torchify(v) for k, v in log_dict.items()}
+        return log_dict
+
     def validation_epoch_end(self, outputs):
-        avg_em = torch.stack([x["eval_exact_match"] for x in outputs]).mean()
-        avg_acc = torch.stack([x["eval_accuracy"] for x in outputs]).mean()
-        avg_loss = torch.stack([x["eval_loss"] for x in outputs]).mean()
-
-        log_dict = {"eval_exact_match": avg_em, "eval_accuracy": avg_acc, "eval_loss": avg_loss}
-
-        return {"eval_loss": avg_loss, "log": log_dict}
+        avg_log = self._average_logs(outputs)
+        return {"log": avg_log}
 
     def val_dataloader(self):
         loader = DataLoader(
@@ -177,3 +226,20 @@ class PointerModule(LightningModule):
             collate_fn=self._collator.collate_batch,
         )
         return loader
+
+    # --- Internal
+
+    @staticmethod
+    def _average_logs(logs):
+        keys = logs[0].keys()
+        avg_log = dict()
+
+        for key in keys:
+            avg_log[key] = sum(log[key] for log in logs) / len(logs)
+
+        return avg_log
+
+    def _maybe_torchify(self, x):
+        if isinstance(x, torch.Tensor):
+            return x
+        return torch.tensor(x, dtype=self.dtype, device=self.device)

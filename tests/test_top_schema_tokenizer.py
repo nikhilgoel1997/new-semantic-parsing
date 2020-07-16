@@ -1,17 +1,11 @@
-# Copyright 2020 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-# =============================================================================
+# Provided under the CC-BY-SA license. Please cite the accompanying paper when using TOP dataset -
+# @ARTICLE {
+#     author  = "Sonal Gupta and Rushin Shah and Mrinal Mohit and Anuj Kumar and Michael Lewis",
+#     title   = "Semantic Parsing for Task Oriented Dialog using Hierarchical Representations",
+#     journal = "Conference on Empirical Methods in Natural Language Processing (EMNLP)",
+#     year    = "2018",
+#     month   = "Oct"
+# }
 import os
 import shutil
 import tempfile
@@ -50,9 +44,7 @@ class TopSchemaTokenizerTest(unittest.TestCase):
             shutil.rmtree(self.tmpdirname)
 
     def test_tokenize(self):
-        """
-        Test cases are examples from TOP dataset arxiv.org/abs/1810.07942
-        """
+        # Test cases are examples from TOP dataset arxiv.org/abs/1810.07942
         schema_str = "[IN:INTENT1 tok1 tok2 tok3 [SL:SLOT1 tok4 tok5 ] ]"
         schema_tok = "[ IN: INTENT1 tok1 tok2 tok3 [ SL: SLOT1 tok4 tok5 ] ]".split(" ")
 
@@ -134,15 +126,6 @@ class TopSchemaTokenizerTest(unittest.TestCase):
         ids = tokenizer.encode(schema_str, source_tokens)
         self.assertSequenceEqual(ids, expected_ids)
 
-    # def test_encode_source_roberta(self):
-    #     src = "Encode this ! weird text ?"
-    #     src_tokenizer = transformers.AutoTokenizer.from_pretrained('roberta-base')
-    #     schema_tokenizer = TopSchemaTokenizer({}, src_tokenizer)
-    #
-    #     encoding = schema_tokenizer.encode_source(src)
-    #     decoded = schema_tokenizer.src_tokenizer.decode(encoding)
-    #     self.assertSequenceEqual(src, decoded)
-
     def test_save_load(self):
         vocab = ["[", "]", "IN:", "INTENT1", "SL:", "SLOT1"]
         src_tokenizer = TransformersTokenizerMock()
@@ -156,11 +139,17 @@ class TopSchemaTokenizerTest(unittest.TestCase):
 
         tokenizer.save(self.tmpdirname, encoder_model_type="test_type")
 
-        with patch(
+        patch_tok_load = patch(
             "new_semantic_parsing.schema_tokenizer.transformers.AutoTokenizer.from_pretrained",
             MagicMock(return_value=TransformersTokenizerMock()),
-        ):
+        )
+        patch_config_load = patch(
+            "new_semantic_parsing.schema_tokenizer.transformers.AutoConfig.from_pretrained",
+            MagicMock(return_value=None),
+        )
+        with patch_tok_load, patch_config_load:
             loaded_tokenizer = TopSchemaTokenizer.load(self.tmpdirname)
+
         self.assertSetEqual(set(loaded_tokenizer._vocab), set(tokenizer._vocab))
 
         new_ids = loaded_tokenizer.encode(schema_str, source_tokens)
@@ -179,6 +168,21 @@ class TopSchemaTokenizerTest(unittest.TestCase):
         expected_ids = [7, 3, 4, 9, 10, 11, 7, 5, 6, 12, 13, 8, 8]
 
         schema_decoded = tokenizer.decode(expected_ids, source_tokens)
+
+        self.assertEqual(schema_str, schema_decoded)
+
+    def test_decode_wpointers(self):
+        vocab = {"[", "]", "IN:", "INTENT1", "SL:", "SLOT1"}
+        src_tokenizer = TransformersTokenizerMock()
+
+        tokenizer = TopSchemaTokenizer(vocab, src_tokenizer)
+
+        schema_str = "[IN:INTENT1 @ptr0 @ptr1 @ptr2 [SL:SLOT1 @ptr3 @ptr4 ] ]"
+        # note that TransformersTokenizerMock splits tok6,tok2 into two subtokens
+        # note that the vocabulary is sorted
+        ids = [7, 3, 4, 9, 10, 11, 7, 5, 6, 12, 13, 8, 8]
+
+        schema_decoded = tokenizer.decode(ids)
 
         self.assertEqual(schema_str, schema_decoded)
 

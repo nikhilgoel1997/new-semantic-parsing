@@ -20,8 +20,9 @@ The code is not shared for easier modification while supporting backcompatibilit
 
 import os
 import sys
-import json
 import logging
+import tempfile
+import argparse
 from os.path import join as path_join
 
 import toml
@@ -43,8 +44,6 @@ from new_semantic_parsing.data import PointerDataset, Seq2SeqDataCollator
 from new_semantic_parsing.callbacks import TransformersModelCheckpoint
 from new_semantic_parsing.lightning_module import PointerModule
 
-from cli.train import parse_args
-
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -54,13 +53,108 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__file__)
 
-
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
-if __name__ == "__main__":
-    args = parse_args()
+def parse_args(args=None):
+    parser = argparse.ArgumentParser()
 
+    # fmt: off
+
+    # data
+    parser.add_argument('--data-dir', required=True,
+                        help='Path to preprocess.py --save-dir containing tokenizer, '
+                             'data.pkl, and args.toml')
+    parser.add_argument('--output-dir', default=None,
+                        help='directory to store checkpoints and other output files')
+    parser.add_argument('--eval-data-amount', default=0.7, type=float,
+                        help='amount of validation set to use when training. '
+                             'The final evaluation will use the full dataset.')
+    parser.add_argument('--new-classes-file', default=None,
+                        help='path to a text file with names of classes to track, one class per line')
+
+    # model
+    parser.add_argument('--encoder-model', default=None,
+                        help='pretrained model name, e.g. bert-base-uncased')
+    parser.add_argument('--layers', default=None, type=int,
+                        help='number of layers in the encoder. '
+                             'Only used if --encoder-model is not provided.')
+    parser.add_argument('--hidden', default=None, type=int,
+                        help='hidden size of the encoder. '
+                             'Only used if --encoder-model is not provided.')
+    parser.add_argument('--heads', default=None, type=int,
+                        help='hidden size of the encoder. '
+                             'Only used if --encoder-model is not provided.')
+    parser.add_argument('--decoder-layers', default=None, type=int,
+                        help='number of layers in the decoder. '
+                             'Equal to the number of the encoder layers by default')
+    parser.add_argument('--decoder-hidden', default=None, type=int,
+                        help='hidden size of the decoder. '
+                             'Equal to the hidden side of the encoder by default')
+    parser.add_argument('--decoder-heads', default=None, type=int,
+                        help='hidden size of the decoder. '
+                             'Equal to the number of the encoder heads by default')
+
+    # model architecture changes
+    parser.add_argument('--use-pointer-bias', default=False, action='store_true',
+                        help='Use bias in pointer network')
+    parser.add_argument('--decoder-head-type', default='ffn', choices=['ffn', 'linear'],
+                        help='Type of network used to make logits from the last decoder state')
+
+    # training
+    parser.add_argument('--epochs', default=1, type=int)
+    parser.add_argument('--early-stopping', default=None, type=int,
+                        help='Lightning-only. Early stopping patience. No early stopping by default.')
+    parser.add_argument('--seed', default=1, type=int)
+    parser.add_argument('--lr', default=None, type=float,
+                        help='By default, lr is chosen according to the Scaling Laws for Neural Language Models')
+    parser.add_argument('--encoder-lr', default=None, type=float,
+                        help='Encoder learning rate, overrides --lr')
+    parser.add_argument('--decoder-lr', default=None, type=float,
+                        help='Decoder learning rate, overrides --lr')
+    parser.add_argument('--weight-decay', default=0, type=float)
+    parser.add_argument('--dropout', default=0.1, type=float,
+                        help='dropout amount for the encoder and decoder, default value 0.1 is from Transformers')
+    parser.add_argument('--warmup-steps', default=1, type=int)
+    parser.add_argument('--gradient-accumulation-steps', default=1, type=int)
+    parser.add_argument('--batch-size', default=64, type=int)
+    parser.add_argument('--max-grad-norm', default=1.0, type=float)
+    parser.add_argument('--num-frozen-encoder-steps', default=0, type=int,
+                        help='number of steps with encoder weights not being updated')
+    parser.add_argument('--label-smoothing', default=0.1, type=float)
+
+    # misc
+    parser.add_argument('--wandb-project', default=None)
+    parser.add_argument('--log-every', default=100, type=int)
+    parser.add_argument('--tag', default=None)
+    parser.add_argument('--fp16', default=False, action='store_true')
+    parser.add_argument('--gpus', default=None, type=int,
+                        help='Lightning-only. Number of gpus to train the model on')
+
+    # fmt: on
+
+    args = parser.parse_args(args)
+
+    # set defaults for None fields
+    if (args.encoder_lr is not None) ^ (args.decoder_lr is not None):
+        raise ValueError("--encoder-lr and --decoder-lr should be both specified")
+
+    args.decoder_layers = args.decoder_layers or args.layers
+    args.decoder_hidden = args.decoder_hidden or args.hidden
+    args.decoder_heads = args.decoder_heads or args.heads
+    args.wandb_project = args.wandb_project or "new_semantic_parsing"
+    args.tag = [args.tag] if args.tag else []  # list is required by wandb interface
+
+    if args.gpus is None:
+        args.gpus = 1 if torch.cuda.is_available() else 0
+
+    if args.output_dir is None:
+        args.output_dir = os.path.join("output_dir", next(tempfile._get_candidate_names()))
+
+    return args
+
+
+def main(args):
     utils.set_seed(args.seed)
 
     wandb_logger = WandbLogger(project=args.wandb_project, tags=args.tag)
@@ -150,6 +244,12 @@ if __name__ == "__main__":
             model_args=args,
         )
 
+    new_classes = None
+    if args.new_classes_file is not None:
+        with open(args.new_classes_file) as f:
+            new_classes = f.read().strip().split("\n")
+            wandb_logger.log_hyperparams({"new_classes": " ".join(new_classes)})
+
     logger.info("Starting training")
     lr = args.lr or utils.get_lr(model)
 
@@ -157,8 +257,6 @@ if __name__ == "__main__":
         lr = {"encoder_lr": args.encoder_lr, "decoder_lr": args.decoder_lr}
 
     adam_eps = 1e-7 if args.fp16 else 1e-9
-
-    # /\ /\ copy of the train.py
 
     lightning_module = PointerModule(
         model=model,
@@ -172,6 +270,7 @@ if __name__ == "__main__":
         adam_eps=adam_eps,
         num_frozen_encoder_steps=args.num_frozen_encoder_steps,
         log_every=args.log_every,
+        monitor_classes=new_classes,
     )
 
     wandb_logger.watch(lightning_module, log="all", log_freq=args.log_every)
@@ -179,16 +278,14 @@ if __name__ == "__main__":
     # there is a werid bug that checkpoint_callback creates checkpoints
     # in the filepath subfolder, e.g. if you specify filepath=output_dir
     # the checkpoints will be created in output_dir/..
-    checkpoint_callback = callbacks.ModelCheckpoint(
+    checkpoint_callback = TransformersModelCheckpoint(
         filepath=path_join(args.output_dir, "pl_checkpoint.ckpt"),
-        save_top_k=2,
+        save_top_k=1,
         verbose=True,
         monitor="eval_exact_match",
         mode="max",
         prefix="",
     )
-
-    transformer_checkpoint_callback = TransformersModelCheckpoint(args.output_dir)
 
     early_stopping = False
     if args.early_stopping is not None:
@@ -212,21 +309,21 @@ if __name__ == "__main__":
         gradient_clip_val=args.max_grad_norm,
         precision=16 if args.fp16 else 32,
         row_log_interval=args.log_every,
-        callbacks=[lr_logger, transformer_checkpoint_callback],
+        limit_val_batches=args.eval_data_amount,
+        callbacks=[lr_logger],
     )
 
     trainer.fit(lightning_module)
 
-    # \/ \/ copy of the train.py
-
-    with open(path_join(args.data_dir, "tokenizer", "config.json")) as f:
-        model_type = json.load(f)["model_type"]
-
-    schema_tokenizer.save(path_join(args.output_dir, "tokenizer"), encoder_model_type=model_type)
-    logger.info(f'Tokenizer saved in {path_join(args.output_dir, "tokenizer")}')
+    model = EncoderDecoderWPointerModel.from_pretrained(args.output_dir)
+    model = model.to(lightning_module.device)
 
     with open(path_join(args.output_dir, "args.toml"), "w") as f:
-        args_dict = {"version": SAVE_FORMAT_VERSION, **vars(args)}
+        args_dict = {
+            "version": SAVE_FORMAT_VERSION,
+            "pl_checkpoint_path": checkpoint_callback.last_checkpoint_path,
+            **vars(args),
+        }
         toml.dump(args_dict, f)
 
     logger.info("Training finished!")
@@ -239,9 +336,8 @@ if __name__ == "__main__":
         num_workers=8,
     )
 
-    # TODO: hardcoded devices, move evaluation logic to PointerModule
     predictions_ids, predictions_str = utils.iterative_prediction(
-        model=lightning_module.model,
+        model=model,
         dataloader=dataloader,
         schema_tokenizer=schema_tokenizer,
         max_len=63,
@@ -270,6 +366,8 @@ if __name__ == "__main__":
     ) / len(targets_str)
     logger.info(f"Exact match (ids): {exact_match_ids}")
 
+    wandb_logger.log_metrics({"eval_exact_match": exact_match_ids})
+
     logger.info("Checking for mismatches between ids and str")
 
     n_errors = 0
@@ -293,3 +391,10 @@ if __name__ == "__main__":
         logger.info(f"Mismatches       : {n_errors}")
         logger.info(f"Exact match (str): {exact_match}")
         logger.info(f"Exact match (ids): {exact_match_ids}")
+
+    wandb_logger.close()
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    main(args)

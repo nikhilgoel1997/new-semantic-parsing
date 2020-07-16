@@ -25,8 +25,6 @@ import transformers
 
 from tqdm.auto import tqdm
 
-from new_semantic_parsing.dataclasses import Seq2SeqEvalPrediciton
-
 
 def set_seed(seed):
     torch.manual_seed(seed)
@@ -55,96 +53,6 @@ def get_src_pointer_mask(input_ids, tokenizer: transformers.PreTrainedTokenizer)
         if token_id in (tokenizer.sep_token_id, tokenizer.pad_token_id):
             mask[i] = 0
     return mask
-
-
-class MetricsMeter:
-    def __init__(self, stop_token_ids):
-        """
-        :param stop_tokens: tokens after which decoding stops (typically EOS and PAD)
-        """
-        self.stop_token_ids = stop_token_ids
-
-    def _truncate(self, pred):
-        i = 0
-        for i, idx in enumerate(pred):
-            if idx in self.stop_token_ids:
-                break
-        return pred[:i]
-
-    def compute_metrics(self, eval_prediction: Seq2SeqEvalPrediciton):
-        """
-        :param eval_prediction: each field of the dataclass corresponds to a list,
-            list element is a single example
-        :return:
-            dict with keys
-                `accuracy` - fraction of correctly predicted tokens under the mask
-                `exact_match` - fraction of correctly predicted sequences (sequences are truncated after EOS)
-        """
-        if len(eval_prediction.predictions[0].shape) != 2:
-            raise ValueError(
-                "eval_prediction.predictions should be a list of predictions, "
-                "expected prediction shape to be (seq_len, vocab_dim), got "
-                f"{eval_prediction.predictions[0].shape} instead"
-            )
-
-        predictions = [np.argmax(p, axis=-1) for p in eval_prediction.predictions]
-        labels = eval_prediction.label_ids
-
-        # accuracy is computed under a known mask
-        # a bit more precisionish behavior, than just accuracy (can be whatather outside the mask)
-        label_masks = eval_prediction.label_masks or [np.ones_like(p) for p in predictions]
-
-        total_tokens = sum(np.sum(m) for m in label_masks)
-        # (p == l) & (1 ^ m) <=> correct tokens which are not masked (masked tokens have mask == 0)
-        accuracy = sum(np.sum((p == l) & m) for p, l, m in zip(predictions, labels, label_masks))
-        accuracy /= total_tokens
-
-        # trauncate until EOS token
-        # for exact match we consider all tokens until EOS/PAD
-        # this is closer to inference setup when generation stops after EOS/PAD
-        truncated_predictions = [self._truncate(p) for p in predictions]
-        truncated_labels = [self._truncate(l) for l in labels]
-
-        exact_match = sum(np.all(p == l) for p, l in zip(truncated_predictions, truncated_labels))
-        exact_match /= len(truncated_predictions)
-
-        return {
-            "accuracy": accuracy,
-            "exact_match": exact_match,
-        }
-
-
-def compute_metrics_from_batch(predictions, labels, masks, stop_tokens):
-    """Compute metrics where all predictions, labels and masks are torch.tensor"""
-    device = predictions.device
-
-    # correct tokens which are not masked (masked tokens have mask == 0)
-    n_correct = ((predictions == labels) & masks.bool()).sum()
-    n_total = masks.sum()
-    accuracy = n_correct / n_total.float()
-
-    # trauncate until EOS token
-    # for exact match we consider all tokens until EOS/PAD
-    # this is closer to inference setup when generation stops after EOS/PAD
-
-    def truncate(pred):
-        i = 0
-        for i, idx in enumerate(pred):
-            if idx in stop_tokens:
-                break
-        return pred[:i]
-
-    truncated_preds = [truncate(p) for p in predictions.detach().unbind()]
-    truncated_labels = [truncate(l) for l in labels.detach().unbind()]
-
-    exact_match = sum(
-        (p.shape == l.shape and torch.all(p == l))
-        for p, l in zip(truncated_preds, truncated_labels)
-    )
-    exact_match = torch.tensor(exact_match, device=device)
-    exact_match = exact_match.float() / len(truncated_preds)
-
-    return {"accuracy": accuracy, "exact_match": exact_match}
 
 
 def get_lr(model: transformers.PreTrainedModel):
