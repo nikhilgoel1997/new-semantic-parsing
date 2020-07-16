@@ -114,6 +114,8 @@ def get_model_type(model_name):
 
 
 def iterative_prediction(model, dataloader, schema_tokenizer, max_len, num_beams, device="cpu"):
+    model = model.to(device)
+
     predictions_ids = []
     predictions_str = []
     text_tokenizer = schema_tokenizer.src_tokenizer

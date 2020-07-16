@@ -279,8 +279,10 @@ def main(args):
 
     trainer.fit(lightning_module)
 
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
     model = EncoderDecoderWPointerModel.from_pretrained(args.output_dir)
-    model = model.to(lightning_module.device)
+    model = model.to(device)
 
     # \/ \/ copy of the train.py
 
@@ -304,7 +306,7 @@ def main(args):
         schema_tokenizer=schema_tokenizer,
         max_len=63,
         num_beams=1,
-        device="cuda" if torch.cuda.is_available() else "cpu",
+        device=device,
     )
 
     logger.info("Computing evaluation metrics on full dataset")
