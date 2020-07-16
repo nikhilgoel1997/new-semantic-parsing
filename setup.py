@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # =============================================================================
+from setuptools import setup
 
-SAVE_FORMAT_VERSION = "0.1-nightly-Jul6"
-
-from .modeling_encoder_decoder_wpointer import EncoderDecoderWPointerModel
-from .schema_tokenizer import TopSchemaTokenizer
-from .seq2seqtrainer import Seq2SeqTrainer
+setup(
+    name="new_semantic_parsing",
+    version="0.1-nightly-Jun29",
+    url="https://github.com/googleinterns/new-semantic-parsing",
+)
