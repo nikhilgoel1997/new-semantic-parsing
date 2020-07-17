@@ -167,7 +167,7 @@ class PointerModule(LightningModule):
 
     # --- Validation
 
-    def validation_step(self, batch, batch_idx):
+    def validation_step(self, batch, batch_idx, prefix="eval"):
         prediction_batch: torch.LongTensor = self.model.generate(
             input_ids=batch["input_ids"].to(self.device),
             pointer_mask=batch["pointer_mask"].to(self.device),
@@ -202,11 +202,11 @@ class PointerModule(LightningModule):
         true_tokens = [self.schema_tokenizer.decode(t, return_tokens=True) for t in target_ids]
 
         tree_metrics = get_tree_path_metrics(
-            pred_tokens, true_tokens, self.monitor_classes, "eval"
+            pred_tokens, true_tokens, self.monitor_classes, prefix
         )
 
         log_dict = {
-            "eval_exact_match": exact_match,
+            f"{prefix}_exact_match": exact_match,
             **tree_metrics,
         }
 
@@ -226,6 +226,28 @@ class PointerModule(LightningModule):
             collate_fn=self._collator.collate_batch,
         )
         return loader
+
+    # --- testing
+
+    def test_dataloader(self):
+        if self.test_dataset is None:
+            raise RuntimeError(".test_dataloader invoked for the model without test_dataset")
+
+        loader = DataLoader(
+            self.test_dataset,
+            batch_size=self.batch_size,
+            num_workers=8,
+            pin_memory=True,
+            collate_fn=self._collator.collate_batch,
+        )
+        return loader
+
+    def test_step(self, batch, batch_idx):
+        return self.validation_step(batch, batch_idx, prefix="test")
+
+    def test_epoch_end(self, outputs):
+        avg_log = self._average_logs(outputs)
+        return {"test_metrics": avg_log}
 
     # --- Internal
 

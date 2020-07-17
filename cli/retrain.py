@@ -222,8 +222,6 @@ def main(args):
         **module_kwargs,
     )
 
-    wandb_logger.watch(lightning_module, log="all", log_freq=lightning_module.log_every)
-
     # there is a werid bug (feature?) that checkpoint_callback creates checkpoints
     # in the filepath subfolder, e.g. if you specify filepath=output_dir
     # the checkpoints will be created in output_dir/..
@@ -258,8 +256,11 @@ def main(args):
     # A trick to start training from the global_step=0
     # when still getting optimizer state and scheduler state restored
     checkpoint = torch.load(train_args["pl_checkpoint_path"])
-    checkpoint["global_step"] = 0
-    checkpoint["epoch"] = 0
+
+    # global_step will be incremented in .test call
+    # -1 is used to get metrics before the training
+    checkpoint["global_step"] = -1
+    checkpoint["epoch"] = -1
 
     initial_checkpoint_path = path_join(args.output_dir, "initial_checkpoint.pl")
     torch.save(checkpoint, initial_checkpoint_path)
@@ -277,6 +278,14 @@ def main(args):
         **trainer_kwargs,
     )
 
+    # evaluate the model before training
+    out = trainer.test(lightning_module, lightning_module.val_dataloader())
+    out = {"eval" + k.lstrip("test"): v for k, v in out["test_metrics"].items()}
+    out["epoch"] = -1
+    out["global_step"] = -1
+    wandb_logger.log_metrics(out)
+
+    wandb_logger.watch(lightning_module, log="all", log_freq=lightning_module.log_every)
     trainer.fit(lightning_module)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
