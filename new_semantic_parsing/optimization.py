@@ -25,9 +25,7 @@ import torch
 from torch.optim.lr_scheduler import LambdaLR
 
 
-def get_optimizers(
-    model, learning_rate, warmup_steps, num_frozen_encoder_steps, weight_decay=0, adam_eps=1e-9
-):
+def get_optimizers(model, learning_rate, warmup_steps, weight_decay=0, adam_eps=1e-9):
     """Setups the optimizer and the learning rate scheduler.
 
     Creates optimizer which can update encoder and decoder with different learning rates
@@ -111,50 +109,14 @@ def get_optimizers(
 
     optimizer = torch.optim.Adam(optimizer_grouped_parameters, eps=adam_eps, betas=(0.9, 0.98))
 
-    scheduler = get_noam_schedule_with_gradual_unfreezing(
-        optimizer,
-        num_warmup_steps=warmup_steps,
-        model_size=model.decoder.config.hidden_size,
-        num_frozen_encoder_steps=num_frozen_encoder_steps,
+    scheduler = get_noam_schedule(
+        optimizer, num_warmup_steps=warmup_steps, model_size=model.decoder.config.hidden_size,
     )
 
     return optimizer, scheduler
 
 
-def get_linear_schedule_with_warmup_and_gradual_unfreezing(
-    optimizer, num_warmup_steps, num_training_steps, num_frozen_encoder_steps, last_epoch=-1,
-):
-    """
-    :param optimizer: torch Optimizer where some param groups have 'group_type' key
-        if group_type starts with 'encoder_' it will be frozen for `num_frozen_encoder_steps`
-    :param num_warmup_steps: number of steps for linear warmup from 0 to optimizer.lr
-    :param num_training_steps: total number of training steps, used to compute lr after the warmup
-    :param num_frozen_encoder_steps: number of steps without encoder updates
-    :param last_epoch: The index of last epoch. Default: -1.
-
-    :return: LambdaLR scheduler
-    """
-
-    set_encoder_requires_grad(optimizer.param_groups, False)
-
-    def lr_lambda(current_step):
-        if current_step >= num_frozen_encoder_steps:
-            set_encoder_requires_grad(optimizer.param_groups, True)
-
-        if current_step < num_warmup_steps:
-            return float(current_step) / float(max(1, num_warmup_steps))
-        return max(
-            0.0,
-            float(num_training_steps - current_step)
-            / float(max(1, num_training_steps - num_warmup_steps)),
-        )
-
-    return LambdaLR(optimizer, lr_lambda, last_epoch)
-
-
-def get_noam_schedule_with_gradual_unfreezing(
-    optimizer, num_warmup_steps, model_size, num_frozen_encoder_steps, last_epoch=1
-):
+def get_noam_schedule(optimizer, num_warmup_steps, model_size, last_epoch=1):
     """
     Creates a Noam (inverse square root) scheduler with linear warmup and encoder gradual unfreezing.
 
@@ -162,7 +124,6 @@ def get_noam_schedule_with_gradual_unfreezing(
         if group_type starts with 'encoder_' it will be frozen for `num_frozen_encoder_steps`
     :param num_warmup_steps: number of steps for linear warmup from 0 to optimizer.lr
     :param model_size: hidden size of the model (d_model)
-    :param num_frozen_encoder_steps: number of steps without encoder updates
     :param last_epoch: The index of last epoch. Default: 1.
 
     :return: LambdaLR scheduler
@@ -170,9 +131,6 @@ def get_noam_schedule_with_gradual_unfreezing(
     set_encoder_requires_grad(optimizer.param_groups, False)
 
     def lr_lambda(current_step):
-        if current_step >= num_frozen_encoder_steps:
-            set_encoder_requires_grad(optimizer.param_groups, True)
-
         current_step = max(current_step, 1)
         _num_warmup_steps = max(num_warmup_steps, 1)
 

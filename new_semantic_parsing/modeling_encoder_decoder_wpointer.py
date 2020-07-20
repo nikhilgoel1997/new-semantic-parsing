@@ -86,17 +86,13 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
 
         # this gives a schema vocab size (without pointer embeddings)
         self.output_vocab_size = self.decoder.config.vocab_size - self.config.max_src_len
-        if self.config.decoder_head_type == "ffn":
-            head_config = deepcopy(self.decoder.config)
-            head_config.vocab_size = self.output_vocab_size
 
-            # Linear -> activation -> LayerNorm -> Linear
-            # from config only .hidden_size, .hidden_act, .layer_norm_eps and .vocab_size are used
-            self.lm_head = transformers.modeling_bert.BertLMPredictionHead(head_config)
-        elif self.config.decoder_head_type == "linear":
-            self.lm_head = nn.Linear(decoder.config.hidden_size, self.output_vocab_size)
-        else:
-            raise ValueError(model_args.decoder_head_type)
+        head_config = deepcopy(self.decoder.config)
+        head_config.vocab_size = self.output_vocab_size
+
+        # Linear -> activation -> LayerNorm -> Linear
+        # from config only .hidden_size, .hidden_act, .layer_norm_eps and .vocab_size are used
+        self.lm_head = transformers.modeling_bert.BertLMPredictionHead(head_config)
 
         # One does not simply ties weights of embeddings with different vocabularies
         # # lm_head.decoder is just a linear layer
@@ -425,3 +421,52 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
 
     def _reorder_cache(self, past, beam_idx):
         return past
+
+    def freeze_encoder(self, freeze=True):
+        value = not freeze
+
+        for param in self.encoder.parameters():
+            param.requires_grad = value
+
+    def freeze_decoder(self, freeze=True):
+        value = not freeze
+
+        for param in self.decoder.parameters():
+            param.requires_grad = value
+
+        if self.enc_dec_proj is None:
+            return
+
+        for param in self.enc_dec_proj.parameters():
+            param.requires_grad = value
+
+    def freeze_head(self, freeze=True, ignore_ids=None):
+        if ignore_ids is not None:
+            raise NotImplementedError("Ignoring ids is not supported yet")
+
+        if not freeze and ignore_ids is not None:
+            raise NotImplementedError("Ignoring ids only awailable for freezing")
+
+        value = not freeze
+
+        for param in self.decoder_q_proj.parameters():
+            param.requires_grad = value
+
+        for name, param in self.lm_head.named_parameters():
+            if ignore_ids is not None and name == "decoder.weight":
+                continue
+            param.requires_grad = value
+
+        if ignore_ids is None:
+            return
+
+        # register a backward hook to only allow gradients through ignore_ids
+        out_proj_weight = self.lm_head.decoder.weight  # nn.Linear
+        freeze_ids = [i for i in range(out_proj_weight.shape[0]) if i not in ignore_ids]
+
+        def _hook(self, grad_input, grad_output):
+            new_grads = grad_input[0].detach().clone()
+            new_grads[:, :, freeze_ids] = 0.0
+            return new_grads, grad_input[1]
+
+        self.lm_head.decoder.register_backward_hook(_hook)

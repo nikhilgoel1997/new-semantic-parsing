@@ -23,6 +23,7 @@ from pytorch_lightning import LightningModule
 
 from new_semantic_parsing.data import PointerDataset, Seq2SeqDataCollator
 from new_semantic_parsing.metrics import compute_metrics_from_batch, get_tree_path_metrics
+from new_semantic_parsing.dataclasses import EncDecFreezingSchedule
 from new_semantic_parsing.optimization import get_optimizers
 from new_semantic_parsing.schema_tokenizer import TopSchemaTokenizer
 from new_semantic_parsing.modeling_encoder_decoder_wpointer import EncoderDecoderWPointerModel
@@ -63,6 +64,7 @@ class PointerModule(LightningModule):
         test_dataset=None,
         log_every=50,
         monitor_classes=None,
+        freezing_schedule: EncDecFreezingSchedule = None,
     ):
         super().__init__()
         self.model = model
@@ -82,6 +84,7 @@ class PointerModule(LightningModule):
         self.adam_eps = adam_eps
         self.log_every = log_every
         self.monitor_classes = monitor_classes
+        self.freezing_schedule = freezing_schedule
 
         self._collator = Seq2SeqDataCollator(
             pad_id=self.text_tokenizer.pad_token_id,
@@ -98,6 +101,9 @@ class PointerModule(LightningModule):
     def training_step(self, batch, batch_idx):
         outputs = self(**batch)
         loss = outputs[0]
+
+        if self.freezing_schedule is not None:
+            self._freezer_step()
 
         if self.log_every == 0 or (self.global_step % self.log_every != 0):
             return {"loss": loss, "log": {"loss": loss}}
@@ -145,7 +151,6 @@ class PointerModule(LightningModule):
             model=self.model,
             learning_rate=self.lr,
             warmup_steps=self.warmup_steps,
-            num_frozen_encoder_steps=self.num_frozen_encoder_steps,
             weight_decay=self.weight_decay,
             adam_eps=self.adam_eps,
         )
@@ -265,3 +270,30 @@ class PointerModule(LightningModule):
         if isinstance(x, torch.Tensor):
             return x
         return torch.tensor(x, dtype=self.dtype, device=self.device)
+
+    def _freezer_step(self):
+        step = self.global_step
+
+        act = self.freezing_schedule.freeze_encoder
+        if act is not None and step == act:
+            self.model.freeze_encoder(freeze=True)
+
+        act = self.freezing_schedule.unfreeze_encoder
+        if act is not None and step == act:
+            self.model.freeze_encoder(freeze=False)
+
+        act = self.freezing_schedule.freeze_decoder
+        if act is not None and step == act:
+            self.model.freeze_decoder(freeze=True)
+
+        act = self.freezing_schedule.unfreeze_decoder
+        if act is not None and step == act:
+            self.model.freeze_decoder(freeze=False)
+
+        act = self.freezing_schedule.freeze_head
+        if act is not None and step == act:
+            self.model.freeze_head(freeze=True, ignore_ids=self.freezing_schedule.ignore_ids)
+
+        act = self.freezing_schedule.unfreeze_head
+        if act is not None and step == act:
+            self.model.freeze_head(freeze=False, ignore_ids=self.freezing_schedule.ignore_ids)

@@ -42,6 +42,7 @@ from new_semantic_parsing import (
 from new_semantic_parsing import utils, SAVE_FORMAT_VERSION
 from new_semantic_parsing.data import PointerDataset, Seq2SeqDataCollator
 from new_semantic_parsing.callbacks import TransformersModelCheckpoint
+from new_semantic_parsing.dataclasses import EncDecFreezingSchedule
 from new_semantic_parsing.lightning_module import PointerModule
 
 
@@ -98,8 +99,6 @@ def parse_args(args=None):
     # model architecture changes
     parser.add_argument('--use-pointer-bias', default=False, action='store_true',
                         help='Use bias in pointer network')
-    parser.add_argument('--decoder-head-type', default='ffn', choices=['ffn', 'linear'],
-                        help='Type of network used to make logits from the last decoder state')
 
     # training
     parser.add_argument('--epochs', default=1, type=int)
@@ -119,9 +118,21 @@ def parse_args(args=None):
     parser.add_argument('--gradient-accumulation-steps', default=1, type=int)
     parser.add_argument('--batch-size', default=64, type=int)
     parser.add_argument('--max-grad-norm', default=1.0, type=float)
-    parser.add_argument('--num-frozen-encoder-steps', default=0, type=int,
-                        help='number of steps with encoder weights not being updated')
     parser.add_argument('--label-smoothing', default=0.1, type=float)
+
+    # --- freezing
+    parser.add_argument('--freeze-encoder', default=None, type=int,
+                        help='step to freeze encoder')
+    parser.add_argument('--unfreeze-encoder', default=None, type=int,
+                        help='step to unfreeze encoder')
+    parser.add_argument('--freeze-decoder', default=None, type=int,
+                        help='step to freeze decoder')
+    parser.add_argument('--unfreeze-decoder', default=None, type=int,
+                        help='step to unfreeze decoder')
+    parser.add_argument('--freeze-head', default=None, type=int,
+                        help='step to freeze head')
+    parser.add_argument('--unfreeze-head', default=None, type=int,
+                        help='step to unfreeze head')
 
     # misc
     parser.add_argument('--wandb-project', default=None)
@@ -258,6 +269,8 @@ def main(args):
 
     adam_eps = 1e-7 if args.fp16 else 1e-9
 
+    freezing_schedule = EncDecFreezingSchedule.from_args(args)
+
     lightning_module = PointerModule(
         model=model,
         schema_tokenizer=schema_tokenizer,
@@ -268,9 +281,9 @@ def main(args):
         warmup_steps=args.warmup_steps,
         weight_decay=args.weight_decay,
         adam_eps=adam_eps,
-        num_frozen_encoder_steps=args.num_frozen_encoder_steps,
         log_every=args.log_every,
         monitor_classes=new_classes,
+        freezing_schedule=freezing_schedule,
     )
 
     wandb_logger.watch(lightning_module, log="all", log_freq=args.log_every)

@@ -28,7 +28,8 @@ python cli/train_lightning.py \
   --label-smoothing 0.1 \
   --epochs 100 \
   --warmup-steps 1500 \
-  --num-frozen-encoder-steps 500 \
+  --freeze-encoder 0 \
+  --unfreeze-encoder 500 \
   --log-every 150 \
   --early-stopping 10 \
   --output-dir $MODEL \

@@ -41,6 +41,7 @@ from new_semantic_parsing import (
 from new_semantic_parsing import utils, SAVE_FORMAT_VERSION
 from new_semantic_parsing.data import PointerDataset, Seq2SeqDataCollator
 from new_semantic_parsing.callbacks import TransformersModelCheckpoint
+from new_semantic_parsing.dataclasses import EncDecFreezingSchedule
 from new_semantic_parsing.lightning_module import PointerModule
 
 
@@ -102,6 +103,20 @@ def parse_args(args=None):
     parser.add_argument('--num-frozen-encoder-steps', default=None, type=int,
                         help='number of steps with encoder weights not being updated')
     parser.add_argument('--label-smoothing', default=None, type=float)
+
+    # --- freezing
+    parser.add_argument('--freeze-encoder', default=None, type=int,
+                        help='step to freeze encoder')
+    parser.add_argument('--unfreeze-encoder', default=None, type=int,
+                        help='step to unfreeze encoder')
+    parser.add_argument('--freeze-decoder', default=None, type=int,
+                        help='step to freeze decoder')
+    parser.add_argument('--unfreeze-decoder', default=None, type=int,
+                        help='step to unfreeze decoder')
+    parser.add_argument('--freeze-head', default=None, type=int,
+                        help='step to freeze head')
+    parser.add_argument('--unfreeze-head', default=None, type=int,
+                        help='step to unfreeze head')
 
     # misc
     parser.add_argument('--wandb-project', default=None)
@@ -211,6 +226,9 @@ def main(args):
         "batch_size": args.batch_size,
     }
     module_kwargs = {k: v for k, v in module_kwargs.items() if v is not None}
+
+    # always overwrite freezing schedule because global_step starts from zero
+    module_kwargs["freezing_schedule"] = EncDecFreezingSchedule.from_args(args)
 
     lightning_module = PointerModule.load_from_checkpoint(
         train_args["pl_checkpoint_path"],

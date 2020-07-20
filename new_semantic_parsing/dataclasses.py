@@ -81,3 +81,23 @@ class Seq2SeqEvalPrediciton:
             masks = [m.numpy() for m in masks]
 
         return cls(logits, labels, masks)
+
+
+@dataclass
+class EncDecFreezingSchedule:
+    freeze_encoder: int = None
+    unfreeze_encoder: int = None
+    freeze_decoder: int = None
+    unfreeze_decoder: int = None
+    freeze_head: int = None
+    unfreeze_head: int = None
+    ignore_ids: List[int] = None
+
+    @classmethod
+    def from_args(cls, args):
+        cls.freeze_encoder = args.freeze_encoder
+        cls.unfreeze_encoder = args.unfreeze_encoder
+        cls.freeze_decoder = args.freeze_decoder
+        cls.unfreeze_decoder = args.unfreeze_decoder
+        cls.freeze_head = args.freeze_head
+        cls.unfreeze_head = args.unfreeze_head
