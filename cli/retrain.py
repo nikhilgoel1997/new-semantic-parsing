@@ -71,7 +71,9 @@ def parse_args(args=None):
     parser.add_argument('--new-classes-file', default=None,
                         help='path to a text file with names of classes to track, one class per line')
     parser.add_argument('--new-data-amount', default=1., type=float,
-                        help='amount of old data (train_dataset) to train on, 0 < amount <= 1')
+                        help='amount of new data (finetune_set) to train on, 0 < amount <= 1')
+    parser.add_argument('--old-data-amount', default=0., type=float,
+                        help='amount of old data (train_set) to train on, only values from {0, 1} are supported')
     parser.add_argument('--eval-data-amount', default=1., type=float,
                         help='amount of validation set to use when training. '
                              'The final evaluation will use the full dataset.')
@@ -150,6 +152,9 @@ def parse_args(args=None):
     if not (0 < args.new_data_amount <= 1):
         raise ValueError(f"--new-data-amount should be between 0 and 1")
 
+    if args.old_data_amount not in {0.0, 1.0}:
+        raise ValueError(f"--old-data-amount should be in [0, 1]")
+
     return args
 
 
@@ -216,6 +221,9 @@ def main(args):
         train_subset_size = int(args.new_data_amount * len(train_dataset))
         train_subset_ids = np.random.permutation(len(train_dataset))[:train_subset_size]
         train_subset = torch.utils.data.Subset(train_dataset, indices=train_subset_ids)
+
+    if args.old_data_amount == 1:
+        train_subset = torch.utils.data.ConcatDataset([train_subset, datasets["train_dataset"]])
 
     # Lightning loads all params which are not specified in .load_from_checkpoint
     # thus, some arguments are only provided if we want to override the loaded values
