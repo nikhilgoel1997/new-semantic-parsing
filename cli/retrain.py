@@ -39,9 +39,9 @@ from new_semantic_parsing import (
     TopSchemaTokenizer,
 )
 from new_semantic_parsing import utils, SAVE_FORMAT_VERSION
-from new_semantic_parsing.data import PointerDataset, Seq2SeqDataCollator
+from new_semantic_parsing.data import PointerDataset, Seq2SeqDataCollator, SampleConcatSubset
 from new_semantic_parsing.callbacks import TransformersModelCheckpoint
-from new_semantic_parsing.dataclasses import EncDecFreezingSchedule
+from new_semantic_parsing.dataclasses import EncDecFreezingSchedule, SamplingMethods
 from new_semantic_parsing.lightning_module import PointerModule
 
 
@@ -74,6 +74,8 @@ def parse_args(args=None):
                         help='amount of new data (finetune_set) to train on, 0 < amount <= 1')
     parser.add_argument('--old-data-amount', default=0., type=float,
                         help='amount of old data (train_set) to train on, only values from {0, 1} are supported')
+    parser.add_argument('--old-data-sampling-method', default='merge_subset',
+                        help='how to sample from old data')
     parser.add_argument('--eval-data-amount', default=1., type=float,
                         help='amount of validation set to use when training. '
                              'The final evaluation will use the full dataset.')
@@ -150,10 +152,13 @@ def parse_args(args=None):
         args.output_dir = os.path.join("output_dir", next(tempfile._get_candidate_names()))
 
     if not (0 < args.new_data_amount <= 1):
-        raise ValueError(f"--new-data-amount should be between 0 and 1")
+        raise ValueError(f"--new-data-amount should be between 0 and 1 (exclusive)")
 
-    if args.old_data_amount not in {0.0, 1.0}:
-        raise ValueError(f"--old-data-amount should be in [0, 1]")
+    if not (0 <= args.old_data_amount <= 1):
+        raise ValueError(f"--old-data-amount should be between 0 and 1 (inclusive)")
+
+    if not hasattr(SamplingMethods, args.old_data_sampling_method):
+        raise ValueError(args.old_data_sampling_method)
 
     return args
 
@@ -218,12 +223,18 @@ def main(args):
 
     train_subset = train_dataset
     if args.new_data_amount is not None and args.new_data_amount < 1.0:
-        train_subset_size = int(args.new_data_amount * len(train_dataset))
-        train_subset_ids = np.random.permutation(len(train_dataset))[:train_subset_size]
-        train_subset = torch.utils.data.Subset(train_dataset, indices=train_subset_ids)
+        train_subset = utils.make_subset(train_subset, args.new_data_amount)
 
-    if args.old_data_amount == 1:
-        train_subset = torch.utils.data.ConcatDataset([train_subset, datasets["train_dataset"]])
+    if args.old_data_amount > 0:
+        if args.old_data_sampling_method == SamplingMethods.merge_subset:
+            old_data_subset = utils.make_subset(datasets["train_dataset"], args.old_data_amount)
+            train_subset = torch.utils.data.ConcatDataset([train_subset, old_data_subset])
+        elif args.old_data_sampling_method == SamplingMethods.sample:
+            train_subset = SampleConcatSubset(
+                train_subset, datasets["train_dataset"], args.old_data_amount
+            )
+        else:
+            raise ValueError(args.old_data_sampling_method)
 
     # Lightning loads all params which are not specified in .load_from_checkpoint
     # thus, some arguments are only provided if we want to override the loaded values
@@ -276,6 +287,7 @@ def main(args):
         "gradient_clip_val": args.max_grad_norm,
         "gpus": args.gpus,
         "accumulate_grad_batches": args.gradient_accumulation_steps,
+        "reload_dataloaders_every_epoch": args.old_data_sampling_method == SamplingMethods.sample,
     }
     trainer_kwargs = {k: v for k, v in trainer_kwargs.items() if v is not None}
 

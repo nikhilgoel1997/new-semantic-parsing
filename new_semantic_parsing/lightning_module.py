@@ -21,7 +21,7 @@ import torch
 from torch.utils.data import DataLoader
 from pytorch_lightning import LightningModule
 
-from new_semantic_parsing.data import PointerDataset, Seq2SeqDataCollator
+from new_semantic_parsing.data import PointerDataset, Seq2SeqDataCollator, SampleConcatSubset
 from new_semantic_parsing.metrics import compute_metrics_from_batch, get_tree_path_metrics
 from new_semantic_parsing.dataclasses import EncDecFreezingSchedule
 from new_semantic_parsing.optimization import get_optimizers
@@ -135,6 +135,9 @@ class PointerModule(LightningModule):
         return {"loss": loss, "aggregate_log": log_dict}
 
     def training_epoch_end(self, outputs):
+        if isinstance(self.train_dataset, SampleConcatSubset):
+            self.train_dataset.resample()
+
         # extract log_dict from outputs and ignore the outputs from no-log iterations
         aggregate_output = [x["aggregate_log"] for x in outputs if ("aggregate_log" in x)]
         if len(aggregate_output) == 0:

@@ -14,6 +14,7 @@
 # =============================================================================
 """Data structures for more clear interfaces across the codebase."""
 
+from enum import Enum
 from typing import NewType, List, Union
 from dataclasses import dataclass
 
@@ -101,3 +102,8 @@ class EncDecFreezingSchedule:
         cls.unfreeze_decoder = args.unfreeze_decoder
         cls.freeze_head = args.freeze_head
         cls.unfreeze_head = args.unfreeze_head
+
+
+class SamplingMethods:
+    merge_subset = "merge_subset"
+    sample = "sample"

@@ -144,3 +144,21 @@ def iterative_prediction(model, dataloader, schema_tokenizer, max_len, num_beams
             predictions_str.append(prediction_str)
 
     return predictions_ids, predictions_str
+
+
+def make_subset(dataset, subset_size):
+    """Make torch Subset by randomly sampling indices from dataset
+
+    Args:
+        dataset: torch Dataset
+        subset_size: float, 0 < subset_size < 1
+    """
+
+    if not (0 < subset_size < 1):
+        raise ValueError(subset_size)
+
+    _subset_size = int(subset_size * len(dataset))
+    _subset_ids = np.random.permutation(len(dataset))[:_subset_size]
+
+    _subset = torch.utils.data.Subset(dataset, indices=_subset_ids)
+    return _subset
