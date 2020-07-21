@@ -128,7 +128,6 @@ def get_noam_schedule(optimizer, num_warmup_steps, model_size, last_epoch=1):
 
     :return: LambdaLR scheduler
     """
-    set_encoder_requires_grad(optimizer.param_groups, False)
 
     def lr_lambda(current_step):
         current_step = max(current_step, 1)
