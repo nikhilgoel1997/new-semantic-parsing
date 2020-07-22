@@ -96,12 +96,14 @@ class EncDecFreezingSchedule:
 
     @classmethod
     def from_args(cls, args):
-        cls.freeze_encoder = args.freeze_encoder
-        cls.unfreeze_encoder = args.unfreeze_encoder
-        cls.freeze_decoder = args.freeze_decoder
-        cls.unfreeze_decoder = args.unfreeze_decoder
-        cls.freeze_head = args.freeze_head
-        cls.unfreeze_head = args.unfreeze_head
+        return cls(
+            args.freeze_encoder,
+            args.unfreeze_encoder,
+            args.freeze_decoder,
+            args.unfreeze_decoder,
+            args.freeze_head,
+            args.unfreeze_head,
+        )
 
 
 class SamplingMethods:

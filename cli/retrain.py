@@ -104,8 +104,6 @@ def parse_args(args=None):
     parser.add_argument('--gradient-accumulation-steps', default=1, type=int)
     parser.add_argument('--batch-size', default=None, type=int)
     parser.add_argument('--max-grad-norm', default=1.0, type=float)
-    parser.add_argument('--num-frozen-encoder-steps', default=None, type=int,
-                        help='number of steps with encoder weights not being updated')
     parser.add_argument('--label-smoothing', default=None, type=float)
 
     # --- freezing
