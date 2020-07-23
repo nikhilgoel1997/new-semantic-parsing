@@ -260,6 +260,8 @@ def main(args):
     # there is a werid bug (feature?) that checkpoint_callback creates checkpoints
     # in the filepath subfolder, e.g. if you specify filepath=output_dir
     # the checkpoints will be created in output_dir/..
+    # NOTE: we need save_top_k=1 fot checkpoint_callback.last_checkpoint_path
+    # to point to the best model
     checkpoint_callback = TransformersModelCheckpoint(
         filepath=path_join(args.output_dir, "pl_checkpoint.ckpt"),
         save_top_k=1,
@@ -326,7 +328,10 @@ def main(args):
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    model = EncoderDecoderWPointerModel.from_pretrained(args.output_dir)
+    # top_k == 1 --> the last checkpoint is the best model
+    assert checkpoint_callback.save_top_k == 1
+    best_model_dir = os.path.dirname(checkpoint_callback.last_checkpoint_path)
+    model = EncoderDecoderWPointerModel.from_pretrained(best_model_dir)
     model = model.to(device)
 
     # \/ \/ copy of the train.py
@@ -363,7 +368,7 @@ def main(args):
     ) / len(eval_dataset)
 
     logger.info(f"Exact match (ids): {exact_match_ids}")
-    wandb_logger.log_metrics({"eval_exact_match": exact_match_ids})
+    wandb_logger._experiment.summary["best_eval_exact_match"] = exact_match_ids
     wandb_logger.close()
 
 
