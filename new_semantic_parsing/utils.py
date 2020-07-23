@@ -153,6 +153,8 @@ def make_subset(dataset, subset_size):
         dataset: torch Dataset
         subset_size: float, 0 < subset_size < 1
     """
+    if subset_size == 1:
+        return dataset
 
     if not (0 < subset_size < 1):
         raise ValueError(subset_size)
