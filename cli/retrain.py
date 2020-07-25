@@ -169,7 +169,7 @@ def parse_args(args=None):
 def main(args):
     utils.set_seed(args.seed)
 
-    wandb_logger = WandbLogger(project=args.wandb_project, tags=args.tag)
+    wandb_logger = WandbLogger(project=args.wandb_project, tags=args.tags)
     wandb_logger.log_hyperparams(args)
 
     if os.path.exists(args.output_dir):
