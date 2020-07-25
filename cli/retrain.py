@@ -42,6 +42,7 @@ from new_semantic_parsing import utils, SAVE_FORMAT_VERSION
 from new_semantic_parsing.data import PointerDataset, Seq2SeqDataCollator, SampleConcatSubset
 from new_semantic_parsing.callbacks import TransformersModelCheckpoint
 from new_semantic_parsing.dataclasses import EncDecFreezingSchedule, SamplingMethods
+from new_semantic_parsing.optimization import get_optimizers
 from new_semantic_parsing.lightning_module import PointerModule
 
 
@@ -107,6 +108,7 @@ def parse_args(args=None):
     parser.add_argument('--batch-size', default=None, type=int)
     parser.add_argument('--max-grad-norm', default=1.0, type=float)
     parser.add_argument('--label-smoothing', default=None, type=float)
+    parser.add_argument('--no-opt-state', default=False, action='store_true')
 
     # --- freezing
     parser.add_argument('--freeze-encoder', default=None, type=int,
@@ -125,7 +127,7 @@ def parse_args(args=None):
     # misc
     parser.add_argument('--wandb-project', default=None)
     parser.add_argument('--log-every', default=None, type=int)
-    parser.add_argument('--tag', default=None)
+    parser.add_argument('--tags', default=None)
     parser.add_argument('--fp16', default=False, action='store_true')
     parser.add_argument('--gpus', default=None, type=int,
                         help='Number of gpus to train the model on')
@@ -143,7 +145,7 @@ def parse_args(args=None):
         args.lr = {"encoder_lr": args.encoder_lr, "decoder_lr": args.decoder_lr}
 
     args.wandb_project = args.wandb_project or "new_semantic_parsing"
-    args.tag = [args.tag] if args.tag else []  # list is required by wandb interface
+    args.tags = args.tags.split(",") if args.tags else []  # list is required by wandb interface
 
     if args.gpus is None:
         args.gpus = 1 if torch.cuda.is_available() else 0
@@ -296,6 +298,12 @@ def main(args):
     # A trick to start training from the global_step=0
     # when still getting optimizer state and scheduler state restored
     checkpoint = torch.load(train_args["pl_checkpoint_path"])
+
+    if args.no_opt_state:
+        optimizer = get_optimizers(
+            model, lightning_module.lr, lightning_module.weight_decay, lightning_module.adam_eps
+        )
+        checkpoint["optimizer_states"] = [optimizer.state_dict()]
 
     # global_step will be incremented in .test call
     # -1 is used to get metrics before the training

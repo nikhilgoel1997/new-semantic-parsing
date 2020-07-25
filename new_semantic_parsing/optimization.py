@@ -25,7 +25,7 @@ import torch
 from torch.optim.lr_scheduler import LambdaLR
 
 
-def get_optimizers(model, learning_rate, warmup_steps, weight_decay=0, adam_eps=1e-9):
+def get_optimizers(model, learning_rate, weight_decay=0, adam_eps=1e-9):
     """Setups the optimizer and the learning rate scheduler.
 
     Creates optimizer which can update encoder and decoder with different learning rates
@@ -35,11 +35,8 @@ def get_optimizers(model, learning_rate, warmup_steps, weight_decay=0, adam_eps=
     Args:
         model: EncoderDecoderWPointerModel.
         learning_rate: either float or dict with keys 'encoder_lr' and 'decoder_lr'.
-        warmup_steps: number of steps at the start of the training when the learning rate
-            is increased from zero to learning_rate value.
-        num_frozen_encoder_steps: number of steps at the start of the training when encoder weights
-            are not updated.
         weight_decay: optimizer weight_decay.
+        adam_eps: ADAM epsilon value
 
     Returns:
         A tuple with two values: torch Optimizer and torch LambdaLR scheduler.
@@ -109,11 +106,7 @@ def get_optimizers(model, learning_rate, warmup_steps, weight_decay=0, adam_eps=
 
     optimizer = torch.optim.Adam(optimizer_grouped_parameters, eps=adam_eps, betas=(0.9, 0.98))
 
-    scheduler = get_noam_schedule(
-        optimizer, num_warmup_steps=warmup_steps, model_size=model.decoder.config.hidden_size,
-    )
-
-    return optimizer, scheduler
+    return optimizer
 
 
 def get_noam_schedule(optimizer, num_warmup_steps, model_size, last_epoch=1):

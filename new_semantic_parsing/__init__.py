@@ -13,7 +13,7 @@
 # limitations under the License.
 # =============================================================================
 
-SAVE_FORMAT_VERSION = "0.3-nightly-Jul14"
+SAVE_FORMAT_VERSION = "0.4-nightly-Jul24"
 
 from .modeling_encoder_decoder_wpointer import EncoderDecoderWPointerModel
 from .schema_tokenizer import TopSchemaTokenizer

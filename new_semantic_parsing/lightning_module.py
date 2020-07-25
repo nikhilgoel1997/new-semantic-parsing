@@ -21,10 +21,10 @@ import torch
 from torch.utils.data import DataLoader
 from pytorch_lightning import LightningModule
 
+import new_semantic_parsing.optimization as opt
 from new_semantic_parsing.data import PointerDataset, Seq2SeqDataCollator, SampleConcatSubset
 from new_semantic_parsing.metrics import compute_metrics_from_batch, get_tree_path_metrics
 from new_semantic_parsing.dataclasses import EncDecFreezingSchedule
-from new_semantic_parsing.optimization import get_optimizers
 from new_semantic_parsing.schema_tokenizer import TopSchemaTokenizer
 from new_semantic_parsing.modeling_encoder_decoder_wpointer import EncoderDecoderWPointerModel
 
@@ -150,12 +150,15 @@ class PointerModule(LightningModule):
         return {"log": avg_log}
 
     def configure_optimizers(self):
-        optimizer, scheduler = get_optimizers(
+        optimizer = opt.get_optimizers(
             model=self.model,
             learning_rate=self.lr,
-            warmup_steps=self.warmup_steps,
             weight_decay=self.weight_decay,
             adam_eps=self.adam_eps,
+        )
+
+        scheduler = opt.get_noam_schedule(
+            optimizer, self.warmup_steps, self.model.decoder.config.hidden_size,
         )
 
         # to call scheduler every step instead of every epoch
