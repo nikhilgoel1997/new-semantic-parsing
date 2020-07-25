@@ -98,6 +98,8 @@ def parse_args(args=None):
     parser.add_argument('--decoder-lr', default=None, type=float,
                         help='Decoder learning rate, overrides --lr')
     parser.add_argument('--weight-decay', default=None, type=float)
+    parser.add_argument('--move-norm', default=None, type=float,
+                        help='regularization coefficient for the distance between the initial and current network')
     parser.add_argument('--dropout', default=None, type=float,
                         help='dropout amount for the encoder and decoder, by defalut checkpoint value is used')
     parser.add_argument('--warmup-steps', default=None, type=int)

@@ -114,6 +114,9 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
                 eps=self.config.label_smoothing
             )
 
+        if self.config.move_norm is not None:
+            self.initial_params = {n: p.detach().clone() for n, p in self.named_parameters()}
+
     def tie_weights(self):
         # for now no weights tying
         pass
@@ -221,6 +224,7 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
         decoder_pad_token_id=None,
         hidden_dropout_prob=0.1,
         attention_probs_dropout_prob=0.1,
+        move_norm=None,
         model_args=None,
     ):
         """
@@ -264,7 +268,11 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
         decoder = transformers.BertModel(decoder_config)
 
         return cls(
-            encoder=encoder, decoder=decoder, max_src_len=max_src_len, model_args=model_args,
+            encoder=encoder,
+            decoder=decoder,
+            max_src_len=max_src_len,
+            model_args=model_args,
+            move_norm=move_norm,
         )
 
     def forward(
@@ -391,11 +399,16 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
             mask = mask.view(-1)
 
         if self.label_smoothing_loss_layer is None:
-            return F.cross_entropy(
+            loss = F.cross_entropy(
                 input, target, ignore_index=self.decoder.embeddings.word_embeddings.padding_idx,
             )
+        else:
+            loss = self.label_smoothing_loss_layer(input, target, mask)
 
-        return self.label_smoothing_loss_layer(input, target, mask)
+        if self.config.move_norm is not None:
+            loss += self.config.move_norm * self._get_move_norm()
+
+        return loss
 
     def _get_pointer_attention_mask(
         self, pointer_attention_mask=None, batch_size=None, device=None, dtype=None
@@ -470,3 +483,13 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
             return new_grads, grad_input[1]
 
         self.lm_head.decoder.register_backward_hook(_hook)
+
+    def _get_move_norm(self):
+        norm = 0
+
+        for n, p1 in self.named_parameters():
+            p2 = self.initial_params[n]
+            norm += torch.dist(p1, p2, p=2)
+
+        norm /= len(self.initial_params)
+        return norm

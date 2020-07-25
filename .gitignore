@@ -2,6 +2,8 @@ data
 data-bin
 output_dir
 wandb
+scripts/old
+tests/test_cli
 
 # tensorboard
 **/runs/**

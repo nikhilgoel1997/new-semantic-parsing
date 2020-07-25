@@ -27,14 +27,21 @@ class EncoderDecoderWPointerConfig(EncoderDecoderConfig):
     model_type = "encoder_decoder_wpointer"
 
     def __init__(self, max_src_len, model_args=None, **kwargs):
+        """
+        Args:
+            max_src_len: int, maximum source sequence length in BPE tokens
+            model_args: argparse args (probably, from tre train script)
+        """
         super().__init__(**kwargs)
 
         self.max_src_len = max_src_len
 
+        self.move_norm = kwargs.get("move_norm", None)
         self.use_pointer_bias = kwargs.get("use_pointer_bias", False)
         self.label_smoothing = kwargs.get("label_smoothing", 0)
 
         if model_args is not None:
+            self.move_norm = getattr(model_args, "move_norm", None)
             self.use_pointer_bias = getattr(model_args, "use_pointer_bias", False)
             self.label_smoothing = getattr(model_args, "label_smoothing", 0)
 

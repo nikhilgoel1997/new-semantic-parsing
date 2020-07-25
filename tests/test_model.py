@@ -16,6 +16,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from copy import deepcopy
 
 import torch
 import transformers
@@ -302,7 +303,7 @@ class EncoderDecoderWPointerTest(unittest.TestCase):
         for name, param in model.named_parameters():
             self.assertTrue(param.requires_grad, msg=name)
 
-    def test_partial_freeze(self):
+    def test_move_norm(self):
         src_vocab_size = 23
         tgt_vocab_size = 17
 
@@ -315,8 +316,14 @@ class EncoderDecoderWPointerTest(unittest.TestCase):
             max_src_len=7,
             hidden_dropout_prob=0,
             attention_probs_dropout_prob=0,
+            move_norm=0.1,
         )
 
+        self.assertTrue(model.initial_params is not None)
+        # check that model parameters do not include initial_params
+        self.assertEqual(len(list(model.parameters())), len(model.initial_params))
+
+        # check that model updates do not change initial_params
         bs, src_len, tgt_len = 3, 5, 7
         x_enc = torch.randint(0, src_vocab_size, size=(bs, src_len))
         x_dec = torch.randint(0, tgt_vocab_size, size=(bs, tgt_len))
@@ -326,48 +333,88 @@ class EncoderDecoderWPointerTest(unittest.TestCase):
 
         optimizer = torch.optim.SGD(model.parameters(), 1e-3)
 
-        # check that initial optimizer state does not interfere with the freezing
-        for _ in range(5):
-            out = model(input_ids=x_enc, decoder_input_ids=dec_inp, labels=labels)
+        out = model(input_ids=x_enc, decoder_input_ids=dec_inp, labels=labels)
 
-            loss = out[0]
-            loss.backward()
+        loss = out[0]
+        loss.backward()
 
-            optimizer.step()
-            optimizer.zero_grad()
+        optimizer.step()
 
-        try:
-            ignore_ids = [1, 2, 3, 4]
-            model.freeze_head(ignore_ids=ignore_ids)
-        except NotImplementedError:
-            self.skipTest("The functionality is not implemented")
+        for n, p1 in model.named_parameters():
+            if "pooler" in n:
+                # we do not use pooler weights
+                continue
 
-        out_proj_copy = model.lm_head.decoder.weight.detach().clone()
+            p2 = model.initial_params[n]
+            self.assertTrue(torch.any(p2 != p1), msg=n)
 
-        # do multiple optimizer updates to ensure that ADAM betas do not interfere with the freezing
-        for _ in range(5):
-            optimizer.zero_grad()
+        # check norm computation
+        norm = model._get_move_norm()
+        self.assertGreater(norm, 0)
 
-            out = model(input_ids=x_enc, decoder_input_ids=dec_inp, labels=labels)
+    def test_move_norm_update(self):
+        """Test that move norm affects optimization"""
 
-            loss = out[0]
-            loss.backward()
+        src_vocab_size = 23
+        tgt_vocab_size = 17
 
-            optimizer.step()
-            optimizer.zero_grad()
-
-        out_proj = model.lm_head.decoder.weight.detach().clone()
-
-        freeze_ids = [
-            i for i in range(model.lm_head.decoder.weight.shape[0]) if i not in ignore_ids
-        ]
-
-        # ignore means "ignore freezing" so these values should change
-        self.assertFalse(
-            torch.allclose(out_proj[ignore_ids], out_proj_copy[ignore_ids]),
-            "unfreezed values do not change",
+        model = EncoderDecoderWPointerModel.from_parameters(
+            layers=1,
+            hidden=32,
+            heads=2,
+            src_vocab_size=src_vocab_size,
+            tgt_vocab_size=tgt_vocab_size,
+            max_src_len=7,
+            hidden_dropout_prob=0,
+            attention_probs_dropout_prob=0,
+            move_norm=100,
         )
-        self.assertTrue(
-            torch.allclose(out_proj[freeze_ids], out_proj_copy[freeze_ids]),
-            "freezed values change",
-        )
+
+        model_copy = deepcopy(model)
+        model_copy.config.move_norm = None
+        del model_copy.initial_params
+
+        model_copy2 = deepcopy(model)
+        model_copy2.config.move_norm = None
+        del model_copy2.initial_params
+
+        for (n1, p1), (n2, p2) in zip(model.named_parameters(), model_copy.named_parameters()):
+            assert n1 == n2
+            assert torch.allclose(p1, p2)
+
+        # check that model updates do not change initial_params
+        bs, src_len, tgt_len = 3, 5, 7
+        x_enc = torch.randint(0, src_vocab_size, size=(bs, src_len))
+        x_dec = torch.randint(0, tgt_vocab_size, size=(bs, tgt_len))
+
+        dec_inp = x_dec[:, :-1].contiguous()
+        labels = x_dec[:, 1:].contiguous()
+
+        losses = []
+        for _model in [model, model_copy, model_copy2]:
+            for _ in range(2):
+                # at the first update move_norm = 0 as model == initial
+                optimizer = torch.optim.SGD(_model.parameters(), 1e-3)
+
+                out = _model(input_ids=x_enc, decoder_input_ids=dec_inp, labels=labels)
+
+                loss = out[0]
+                loss.backward()
+
+                optimizer.step()
+
+            losses.append(loss.detach())
+
+        self.assertTrue(torch.allclose(losses[1], losses[2]), msg="test is not deterministic")
+        self.assertFalse(torch.allclose(losses[0], losses[1]))
+
+        for (n1, p1), (n2, p2), (n3, p3) in zip(
+            model.named_parameters(), model_copy.named_parameters(), model_copy2.named_parameters()
+        ):
+            assert n1 == n2 == n3
+            if "pooler" in n1:
+                # we do not use pooler weights
+                continue
+
+            self.assertTrue(torch.allclose(p2, p3), msg=f"test is not deterministic")
+            self.assertFalse(torch.allclose(p1, p2), msg=n1)
