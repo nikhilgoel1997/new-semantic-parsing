@@ -20,6 +20,7 @@ creating it and preprocesses the data.
 
 import os
 import sys
+import shutil
 import logging
 import argparse
 import tempfile
@@ -28,7 +29,6 @@ from os.path import join as path_join
 import toml
 import torch
 import transformers
-import numpy as np
 
 from pytorch_lightning import Trainer
 from pytorch_lightning import callbacks
@@ -131,6 +131,7 @@ def parse_args(args=None):
     parser.add_argument('--fp16', default=False, action='store_true')
     parser.add_argument('--gpus', default=None, type=int,
                         help='Number of gpus to train the model on')
+    parser.add_argument('--clean-output', default=False, action='store_true')
 
     # fmt: on
 
@@ -334,6 +335,8 @@ def main(args):
     wandb_logger.log_metrics(out)
 
     wandb_logger.watch(lightning_module, log="all", log_freq=lightning_module.log_every)
+
+    # --- FIT
     trainer.fit(lightning_module)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -380,6 +383,9 @@ def main(args):
     logger.info(f"Exact match (ids): {exact_match_ids}")
     wandb_logger._experiment.summary["best_eval_exact_match"] = exact_match_ids
     wandb_logger.close()
+
+    if args.clean_output:
+        shutil.rmtree(args.output_dir)
 
 
 if __name__ == "__main__":
