@@ -295,13 +295,65 @@ class EncoderDecoderWPointerTest(unittest.TestCase):
         for name, param in model.named_parameters():
             self.assertFalse(param.requires_grad, msg=name)
 
-        model.freeze_encoder(False)
-        model.freeze_decoder(False)
-        model.freeze_head(False)
+        model.freeze_encoder(freeze=False)
+        model.freeze_decoder(freeze=False)
+        model.freeze_head(freeze=False)
 
         # check that all parameters are trainable again
         for name, param in model.named_parameters():
             self.assertTrue(param.requires_grad, msg=name)
+
+        # check that initial optimizer state does not interfere with the freezing
+        bs, src_len, tgt_len = 3, 5, 7
+        x_enc = torch.randint(0, src_vocab_size, size=(bs, src_len))
+        x_dec = torch.randint(0, tgt_vocab_size, size=(bs, tgt_len))
+
+        dec_inp = x_dec[:, :-1].contiguous()
+        labels = x_dec[:, 1:].contiguous()
+
+        for opt_class in [torch.optim.SGD, torch.optim.Adam]:
+            with self.subTest(repr(opt_class)):
+                optimizer = opt_class(model.parameters(), lr=1e-3)
+
+                for _ in range(5):
+                    out = model(input_ids=x_enc, decoder_input_ids=dec_inp, labels=labels)
+
+                    loss = out[0]
+                    loss.backward()
+
+                    optimizer.step()
+                    optimizer.zero_grad()
+
+                model.freeze_encoder(freeze=True)
+                model.freeze_decoder(freeze=True)
+
+                model_copy = deepcopy(model)
+
+                # do multiple optimizer updates to ensure that ADAM betas do not interfere with the freezing
+                for _ in range(5):
+                    optimizer.zero_grad()
+
+                    out = model(input_ids=x_enc, decoder_input_ids=dec_inp, labels=labels)
+
+                    loss = out[0]
+                    loss.backward()
+
+                    optimizer.step()
+                    optimizer.zero_grad()
+
+                for (n1, p1), (n2, p2) in zip(
+                    model.encoder.named_parameters(), model_copy.encoder.named_parameters()
+                ):
+                    assert n1 == n2
+                    self.assertFalse(p1.requires_grad)
+                    self.assertTrue(torch.allclose(p1, p2), msg=f"Optimizer state changed {n1}")
+
+                for (n1, p1), (n2, p2) in zip(
+                    model.decoder.named_parameters(), model_copy.decoder.named_parameters()
+                ):
+                    assert n1 == n2
+                    self.assertFalse(p1.requires_grad)
+                    self.assertTrue(torch.allclose(p1, p2), msg=f"Optimizer state changed {n1}")
 
     def test_move_norm(self):
         src_vocab_size = 23

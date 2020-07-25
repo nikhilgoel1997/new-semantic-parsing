@@ -453,36 +453,14 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
         for param in self.enc_dec_proj.parameters():
             param.requires_grad = value
 
-    def freeze_head(self, freeze=True, ignore_ids=None):
-        if ignore_ids is not None:
-            raise NotImplementedError("Ignoring ids is not supported yet")
-
-        if not freeze and ignore_ids is not None:
-            raise NotImplementedError("Ignoring ids only awailable for freezing")
-
+    def freeze_head(self, freeze=True):
         value = not freeze
 
         for param in self.decoder_q_proj.parameters():
             param.requires_grad = value
 
         for name, param in self.lm_head.named_parameters():
-            if ignore_ids is not None and name == "decoder.weight":
-                continue
             param.requires_grad = value
-
-        if ignore_ids is None:
-            return
-
-        # register a backward hook to only allow gradients through ignore_ids
-        out_proj_weight = self.lm_head.decoder.weight  # nn.Linear
-        freeze_ids = [i for i in range(out_proj_weight.shape[0]) if i not in ignore_ids]
-
-        def _hook(self, grad_input, grad_output):
-            new_grads = grad_input[0].detach().clone()
-            new_grads[:, :, freeze_ids] = 0.0
-            return new_grads, grad_input[1]
-
-        self.lm_head.decoder.register_backward_hook(_hook)
 
     def _get_move_norm(self):
         norm = 0
