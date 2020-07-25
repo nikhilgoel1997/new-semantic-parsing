@@ -70,11 +70,13 @@ def parse_args(args=None):
 
     args = parser.parse_args(args)
 
+    if args.split_amount is not None:
+        if not 0.0 < args.split_amount < 1.0:
+            raise ValueError("--split-amount should be between 0. and 1.")
+
     if args.split_class is not None:
         if args.split_amount is None:
-            raise ValueError("--split-ratio should be specified")
-        if not 0.0 < args.split_amount < 1.0:
-            raise ValueError("--split-ration should be between 0. and 1.")
+            raise ValueError("--split-amount should be specified")
 
     return args
 
@@ -92,26 +94,30 @@ def main(args):
     full_train_data_size = len(train_data)  # used to check the train/finetune split
     finetune_data, finetune_path = None, None
 
-    if args.split_class is not None:
+    if args.split_amount is not None:
         # NOTE: this is not train/eval split, this is train/finetune split
         # finetune part is not used by train script, but used by retrain script
 
         logger.info("Splitting the training dataset")
-        split_class_ids = [
-            i for i, schema in enumerate(train_data.schema) if args.split_class in schema
-        ]
-        take = int(len(split_class_ids) * args.split_amount)
-        leave = len(split_class_ids) - take
+        split_ids = list(range(len(train_data)))
+
+        if args.split_class is not None:
+            split_ids = [
+                i for i, schema in enumerate(train_data.schema) if args.split_class in schema
+            ]
+            logger.info(
+                f"Moving {100 * args.split_amount}% of {args.split_class} into a finetuning subset"
+            )
+
+        take = int(len(split_ids) * args.split_amount)
+        leave = len(split_ids) - take
 
         assert take > 0
 
-        logger.info(
-            f"Moving {100 * args.split_amount}% of {args.split_class} into a finetuning subset"
-        )
         logger.info(f"Taking {take} examples and leaving {leave} examples")
 
-        shuffle(split_class_ids)
-        subset_ids = split_class_ids[:take]
+        shuffle(split_ids)
+        subset_ids = split_ids[:take]
         train_data_ids = list(set(range(len(train_data))) - set(subset_ids))
 
         finetune_data = train_data.iloc[subset_ids]
@@ -135,7 +141,7 @@ def main(args):
         with open(args.schema_vocab) as f:
             schema_vocab = f.read().split("\n")
 
-    if args.split_class is not None:
+    if args.split_amount is not None:
         finetune_schema_vocab = reduce(
             set.union, map(utils.get_vocab_top_schema, finetune_data.schema)
         )
@@ -164,7 +170,7 @@ def main(args):
     )
 
     finetune_dataset = None
-    if args.split_class is not None:
+    if args.split_amount is not None:
         logger.info("Tokenizing finetune set")
         finetune_dataset = new_semantic_parsing.data.make_dataset(finetune_path, schema_tokenizer)
 
