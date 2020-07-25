@@ -137,7 +137,7 @@ def parse_args(args=None):
     # misc
     parser.add_argument('--wandb-project', default=None)
     parser.add_argument('--log-every', default=100, type=int)
-    parser.add_argument('--tag', default=None)
+    parser.add_argument('--tags', default=None)
     parser.add_argument('--fp16', default=False, action='store_true')
     parser.add_argument('--gpus', default=None, type=int,
                         help='Lightning-only. Number of gpus to train the model on')
@@ -154,7 +154,7 @@ def parse_args(args=None):
     args.decoder_hidden = args.decoder_hidden or args.hidden
     args.decoder_heads = args.decoder_heads or args.heads
     args.wandb_project = args.wandb_project or "new_semantic_parsing"
-    args.tag = [args.tag] if args.tag else []  # list is required by wandb interface
+    args.tags = args.tags.split(",") if args.tags else []  # list is required by wandb interface
 
     if args.gpus is None:
         args.gpus = 1 if torch.cuda.is_available() else 0

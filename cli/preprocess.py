@@ -56,8 +56,6 @@ def parse_args(args=None):
                         help='pratrained tokenizer name or path to a saved tokenizer')
     parser.add_argument('--output-dir', required=True,
                         help='directory to save preprocessed data')
-    parser.add_argument('--schema-vocab',
-                        help='path to schema vocab to use')
     parser.add_argument('--seed', default=34)
 
     # splitting parameters
@@ -94,12 +92,17 @@ def main(args):
     full_train_data_size = len(train_data)  # used to check the train/finetune split
     finetune_data, finetune_path = None, None
 
+    schema_vocab = reduce(set.union, map(utils.get_vocab_top_schema, train_data.schema))
+
     if args.split_amount is not None:
         # NOTE: this is not train/eval split, this is train/finetune split
         # finetune part is not used by train script, but used by retrain script
 
+        # get a small number of examples that contains all classes from schema_vocab
+        required_example_ids = utils.get_required_example_ids(schema_vocab, train_data)
+
         logger.info("Splitting the training dataset")
-        split_ids = list(range(len(train_data)))
+        split_ids = list(set(range(len(train_data))) - required_example_ids)
 
         if args.split_class is not None:
             split_ids = [
@@ -113,12 +116,13 @@ def main(args):
         leave = len(split_ids) - take
 
         assert take > 0
+        assert leave >= len(required_example_ids)
 
         logger.info(f"Taking {take} examples and leaving {leave} examples")
 
         shuffle(split_ids)
         subset_ids = split_ids[:take]
-        train_data_ids = list(set(range(len(train_data))) - set(subset_ids))
+        train_data_ids = list(set(range(len(train_data))) - set(subset_ids) | required_example_ids)
 
         finetune_data = train_data.iloc[subset_ids]
         train_data = train_data.iloc[train_data_ids]
@@ -134,12 +138,6 @@ def main(args):
         train_data.to_csv(train_path, sep="\t", index=False, header=False)
 
     logger.info("Getting schema vocabulary")
-
-    if args.schema_vocab is None:
-        schema_vocab = reduce(set.union, map(utils.get_vocab_top_schema, train_data.schema))
-    else:
-        with open(args.schema_vocab) as f:
-            schema_vocab = f.read().split("\n")
 
     if args.split_amount is not None:
         finetune_schema_vocab = reduce(

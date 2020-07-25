@@ -164,3 +164,25 @@ def make_subset(dataset, subset_size):
 
     _subset = torch.utils.data.Subset(dataset, indices=_subset_ids)
     return _subset
+
+
+def get_required_example_ids(schema_vocab, train_data):
+    required_schema_vocab = set()
+    required_example_ids = set()
+
+    for i, row in train_data.iterrows():
+        add_this = False
+        for token in schema_vocab.difference(required_schema_vocab):
+            if token in row.schema:
+                add_this = True
+                required_schema_vocab.add(token)
+
+        if add_this:
+            required_example_ids.add(i)
+
+        if required_schema_vocab == schema_vocab:
+            break
+    else:
+        raise RuntimeError("Full vocabulary was not found in the training set")
+
+    return required_example_ids
