@@ -239,8 +239,7 @@ class EncoderDecoderWPointerTest(unittest.TestCase):
             src_vocab_size=src_vocab_size,
             tgt_vocab_size=tgt_vocab_size,
             max_src_len=7,
-            hidden_dropout_prob=0,
-            attention_probs_dropout_prob=0,
+            dropout=0,
         )
 
         input_ids = torch.randint(src_vocab_size, size=(3, 7))
@@ -279,8 +278,7 @@ class EncoderDecoderWPointerTest(unittest.TestCase):
             src_vocab_size=src_vocab_size,
             tgt_vocab_size=tgt_vocab_size,
             max_src_len=7,
-            hidden_dropout_prob=0,
-            attention_probs_dropout_prob=0,
+            dropout=0,
         )
 
         # check that all parameters are trainable
@@ -366,8 +364,7 @@ class EncoderDecoderWPointerTest(unittest.TestCase):
             src_vocab_size=src_vocab_size,
             tgt_vocab_size=tgt_vocab_size,
             max_src_len=7,
-            hidden_dropout_prob=0,
-            attention_probs_dropout_prob=0,
+            dropout=0,
             move_norm=0.1,
         )
 
@@ -417,8 +414,7 @@ class EncoderDecoderWPointerTest(unittest.TestCase):
             src_vocab_size=src_vocab_size,
             tgt_vocab_size=tgt_vocab_size,
             max_src_len=7,
-            hidden_dropout_prob=0,
-            attention_probs_dropout_prob=0,
+            dropout=0,
             move_norm=100,
         )
 
