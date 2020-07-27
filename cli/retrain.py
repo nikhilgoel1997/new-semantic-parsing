@@ -42,7 +42,7 @@ from new_semantic_parsing import utils, SAVE_FORMAT_VERSION, EncoderDecoderWPoin
 from new_semantic_parsing.data import PointerDataset, Seq2SeqDataCollator, SampleConcatSubset
 from new_semantic_parsing.callbacks import TransformersModelCheckpoint
 from new_semantic_parsing.dataclasses import EncDecFreezingSchedule, SamplingMethods
-from new_semantic_parsing.optimization import get_optimizers
+from new_semantic_parsing.optimization import get_optimizers, set_weight_decay
 from new_semantic_parsing.lightning_module import PointerModule
 
 
@@ -214,15 +214,13 @@ def main(args):
 
     logger.info("Creating a model")
 
-    model_kwargs = {
-        "hidden_dropout_prob": args.dropout,
-        "attention_probs_dropout_prob": args.dropout,
-        "weight_decay": args.weight_decay,
-        "move_norm": args.move_norm,
-    }
-    model_kwargs = {k: v for k, v in model_kwargs.items() if v is not None}
+    model_config = EncoderDecoderWPointerConfig.from_pretrained(args.model_dir)
+    if args.dropout is not None:
+        model_config.set_dropout(args.dropout)
+    if args.move_norm is not None:
+        model_config.move_norm = args.move_norm
 
-    model = EncoderDecoderWPointerModel.from_pretrained(args.model_dir, **model_kwargs)
+    model = EncoderDecoderWPointerModel.from_pretrained(args.model_dir, config=model_config)
 
     new_classes = None
     if args.new_classes_file is not None:
@@ -347,12 +345,13 @@ def main(args):
     # because checkpoint format is not obvious for this parameter
     if args.weight_decay is not None:
         # PointerModule has a single optimizer
-        for i, group in enumerate(trainer.optimizers[0].param_groups):
-            trainer.optimizers[0].param_groups[i]["weight_decay"] = args.weight_decay
+        set_weight_decay(trainer.optimizers[0].param_groups, args.weight_decay)
 
     wandb_logger.watch(lightning_module, log="all", log_freq=lightning_module.log_every)
 
     # --- FIT
+    utils.check_config(lightning_module, trainer, args)
+
     trainer.fit(lightning_module)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"

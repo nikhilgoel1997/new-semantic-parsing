@@ -42,9 +42,6 @@ def get_optimizers(model, learning_rate, weight_decay=0, adam_eps=1e-9):
         A tuple with two values: torch Optimizer and torch LambdaLR scheduler.
     """
 
-    # Prepare optimizer and schedule (linear warmup and decay)
-    no_decay = ["bias", "LayerNorm.weight"]
-
     lr = learning_rate
     if isinstance(lr, float):
         encoder_lr = decoder_lr = lr
@@ -67,12 +64,14 @@ def get_optimizers(model, learning_rate, weight_decay=0, adam_eps=1e-9):
 
     decoder_parameters = chain(*to_chain)
 
+    no_decay = ["bias", "LayerNorm.weight"]
     # fmt: off
     optimizer_grouped_parameters = [
         {
             "params": [p for n, p in decoder_parameters if not any(nd in n for nd in no_decay)],
             "initial_lr": decoder_lr,
             "lr": decoder_lr,
+            "use_weight_decay": True,
             "weight_decay": weight_decay,
             "group_type": "decoder_params",
         },
@@ -80,6 +79,7 @@ def get_optimizers(model, learning_rate, weight_decay=0, adam_eps=1e-9):
             "params": [p for n, p in decoder_parameters if any(nd in n for nd in no_decay)],
             "initial_lr": decoder_lr,
             "lr": decoder_lr,
+            "use_weight_decay": False,
             "weight_decay": 0.0,
             "group_type": "decoder_params",
         },
@@ -91,6 +91,7 @@ def get_optimizers(model, learning_rate, weight_decay=0, adam_eps=1e-9):
                 "params": [p for n, p in model.encoder.named_parameters() if not any(nd in n for nd in no_decay)],
                 "initial_lr": encoder_lr,
                 "lr": encoder_lr,
+                "use_weight_decay": True,
                 "weight_decay": weight_decay,
                 "group_type": "encoder_params",
             },
@@ -98,6 +99,7 @@ def get_optimizers(model, learning_rate, weight_decay=0, adam_eps=1e-9):
                 "params": [p for n, p in model.encoder.named_parameters() if any(nd in n for nd in no_decay)],
                 "initial_lr": encoder_lr,
                 "lr": encoder_lr,
+                "use_weight_decay": False,
                 "weight_decay": 0.0,
                 "group_type": "encoder_params",
             },
@@ -145,3 +147,9 @@ def set_encoder_requires_grad(param_groups, value: bool):
                 # if value has already been set
                 return
             param.requires_grad = value
+
+
+def set_weight_decay(param_groups, weight_decay):
+    for param_group in param_groups:
+        if param_group["use_weight_decay"]:
+            param_group["weight_decay"] = weight_decay

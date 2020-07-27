@@ -34,7 +34,14 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
     base_model_prefix = "encoder_decoder_wpointer"
 
     def __init__(
-        self, config=None, encoder=None, decoder=None, max_src_len=None, model_args=None, **kwargs,
+        self,
+        config=None,
+        encoder=None,
+        decoder=None,
+        max_src_len=None,
+        dropout=None,
+        model_args=None,
+        **kwargs,
     ):
         """Initialize the model either from config or from encoder and decoder models.
 
@@ -54,6 +61,7 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
                 encoder=encoder.config.to_dict(),
                 decoder=decoder.config.to_dict(),
                 max_src_len=max_src_len,
+                dropout=dropout,
                 model_args=model_args,
                 **kwargs,
             )
@@ -230,8 +238,7 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
         decoder_heads=None,
         encoder_pad_token_id=0,
         decoder_pad_token_id=None,
-        hidden_dropout_prob=0.1,
-        attention_probs_dropout_prob=0.1,
+        dropout=0,
         move_norm=None,
         model_args=None,
     ):
@@ -251,8 +258,8 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
             vocab_size=src_vocab_size,
             num_hidden_layers=layers,
             num_attention_heads=heads,
-            hidden_dropout_prob=hidden_dropout_prob,
-            attention_probs_dropout_prob=attention_probs_dropout_prob,
+            hidden_dropout_prob=dropout,
+            attention_probs_dropout_prob=dropout,
             pad_token_id=encoder_pad_token_id,
         )
         encoder = transformers.BertModel(encoder_config)
@@ -269,8 +276,8 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
             is_decoder=True,
             num_hidden_layers=decoder_layers,
             num_attention_heads=decoder_heads,
-            hidden_dropout_prob=hidden_dropout_prob,
-            attention_probs_dropout_prob=attention_probs_dropout_prob,
+            hidden_dropout_prob=dropout,
+            attention_probs_dropout_prob=dropout,
             pad_token_id=decoder_pad_token_id,
         )
         decoder = transformers.BertModel(decoder_config)
@@ -281,6 +288,7 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
             max_src_len=max_src_len,
             model_args=model_args,
             move_norm=move_norm,
+            dropout=dropout,
         )
 
     def forward(
@@ -373,6 +381,7 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
 
         # NOTE: this implementaion is computationally inefficient during inference
         attention_scores = query @ keys.transpose(1, 2)  # (bs, tgt_len, src_len)
+        attention_scores = F.dropout(attention_scores, p=self.config.dropout)
 
         # mask becomes 0 for all 1 (keep) positions and -1e4 in all 0 (mask) positions
         # NOTE: we can use this mask to additionaly guide the model
@@ -391,6 +400,7 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
         assert attention_scores.shape == attention_scores_shape, "attention scores changed shape"
 
         # NOTE: maybe add some kind of normalization between dec_logits?
+        decoder_hidden_states = F.dropout(decoder_hidden_states, p=self.config.dropout)
         decoder_logits = self.lm_head(decoder_hidden_states)  # (bs, tgt_len, tgt_vocab_size)
         combined_logits = torch.cat([decoder_logits, attention_scores], dim=-1)
 

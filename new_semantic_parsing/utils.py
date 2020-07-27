@@ -186,3 +186,23 @@ def get_required_example_ids(schema_vocab, train_data):
         raise RuntimeError("Full vocabulary was not found in the training set")
 
     return required_example_ids
+
+
+def check_config(pointer_module, trainer, args):
+    """Check that both module and trainer comply with args"""
+    _cfg = pointer_module.model.config
+    if args.dropout is not None:
+        assert _cfg.dropout == args.dropout
+        assert _cfg.encoder.hidden_dropout_prob == args.dropout
+        assert _cfg.decoder.hidden_dropout_prob == args.dropout
+        assert _cfg.encoder.attention_probs_dropout_prob == args.dropout
+        assert _cfg.decoder.attention_probs_dropout_prob == args.dropout
+    if args.move_norm is not None:
+        assert _cfg.move_norm == args.move_norm
+    if args.label_smoothing is not None:
+        assert _cfg.label_smoothing == args.label_smoothing
+    if args.weight_decay is not None:
+        for param_group in trainer.optimizers[0].param_groups:
+            if not param_group["use_weight_decay"]:
+                continue
+            assert param_group["weight_decay"] == args.weight_decay

@@ -113,7 +113,7 @@ def parse_args(args=None):
                         help='Decoder learning rate, overrides --lr')
     parser.add_argument('--weight-decay', default=0, type=float)
     parser.add_argument('--dropout', default=0.1, type=float,
-                        help='dropout amount for the encoder and decoder, default value 0.1 is from Transformers')
+                        help='dropout amount for the encoder, decoder and head, default value 0.1 is from Transformers')
     parser.add_argument('--warmup-steps', default=1, type=int)
     parser.add_argument('--gradient-accumulation-steps', default=1, type=int)
     parser.add_argument('--batch-size', default=64, type=int)
@@ -234,7 +234,11 @@ def main(args):
         decoder = transformers.BertModel(decoder_config)
 
         model = EncoderDecoderWPointerModel(
-            encoder=encoder, decoder=decoder, max_src_len=max_src_len, model_args=args,
+            encoder=encoder,
+            decoder=decoder,
+            max_src_len=max_src_len,
+            dropout=args.dropout,
+            model_args=args,
         )
 
     else:  # if args.encoder_model is not specified
@@ -250,8 +254,7 @@ def main(args):
             encoder_pad_token_id=text_tokenizer.pad_token_id,
             decoder_pad_token_id=schema_tokenizer.pad_token_id,
             max_src_len=max_src_len,
-            hidden_dropout_prob=args.dropout,
-            attention_probs_dropout_prob=args.dropout,
+            dropout=args.dropout,
             model_args=args,
         )
 
