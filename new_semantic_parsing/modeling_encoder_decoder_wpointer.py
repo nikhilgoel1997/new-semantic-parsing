@@ -117,6 +117,14 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
         if self.config.move_norm is not None:
             self.initial_params = {n: p.detach().clone() for n, p in self.named_parameters()}
 
+    def to(self, *args, **kwargs):
+        if hasattr(self, "initial_params") and self.initial_params is not None:
+            self.initial_params = {
+                n: p.to(*args, **kwargs) for n, p in self.initial_params.items()
+            }
+
+        return super(EncoderDecoderWPointerModel, self).to(*args, **kwargs)
+
     def tie_weights(self):
         # for now no weights tying
         pass
