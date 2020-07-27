@@ -38,7 +38,7 @@ from new_semantic_parsing import (
     EncoderDecoderWPointerModel,
     TopSchemaTokenizer,
 )
-from new_semantic_parsing import utils, SAVE_FORMAT_VERSION
+from new_semantic_parsing import utils, SAVE_FORMAT_VERSION, EncoderDecoderWPointerConfig
 from new_semantic_parsing.data import PointerDataset, Seq2SeqDataCollator, SampleConcatSubset
 from new_semantic_parsing.callbacks import TransformersModelCheckpoint
 from new_semantic_parsing.dataclasses import EncDecFreezingSchedule, SamplingMethods
@@ -214,7 +214,15 @@ def main(args):
 
     logger.info("Creating a model")
 
-    model = EncoderDecoderWPointerModel.from_pretrained(args.model_dir)
+    model_kwargs = {
+        "hidden_dropout_prob": args.dropout,
+        "attention_probs_dropout_prob": args.dropout,
+        "weight_decay": args.weight_decay,
+        "move_norm": args.move_norm,
+    }
+    model_kwargs = {k: v for k, v in model_kwargs.items() if v is not None}
+
+    model = EncoderDecoderWPointerModel.from_pretrained(args.model_dir, **model_kwargs)
 
     new_classes = None
     if args.new_classes_file is not None:
