@@ -219,6 +219,8 @@ def main(args):
         model_config.set_dropout(args.dropout)
     if args.move_norm is not None:
         model_config.move_norm = args.move_norm
+    if args.label_smoothing is not None:
+        model_config.label_smoothing = args.label_smoothing
 
     model = EncoderDecoderWPointerModel.from_pretrained(args.model_dir, config=model_config)
 
@@ -350,7 +352,7 @@ def main(args):
     wandb_logger.watch(lightning_module, log="all", log_freq=lightning_module.log_every)
 
     # --- FIT
-    utils.check_config(lightning_module, trainer, args)
+    utils.check_config(lightning_module, trainer, args, strict=True)
 
     trainer.fit(lightning_module)
 

@@ -331,6 +331,9 @@ def main(args):
         callbacks=[lr_logger],
     )
 
+    # --- FIT
+    utils.check_config(lightning_module, trainer, args)
+
     trainer.fit(lightning_module)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
