@@ -342,6 +342,14 @@ def main(args):
     out["global_step"] = -1
     wandb_logger.log_metrics(out)
 
+    # optimizer weight_decay value determined by the checkpoint
+    # it is simpler to change it here than in the checkpoint
+    # because checkpoint format is not obvious for this parameter
+    if args.weight_decay is not None:
+        # PointerModule has a single optimizer
+        for i, group in enumerate(trainer.optimizers[0].param_groups):
+            trainer.optimizers[0].param_groups[i]["weight_decay"] = args.weight_decay
+
     wandb_logger.watch(lightning_module, log="all", log_freq=lightning_module.log_every)
 
     # --- FIT
