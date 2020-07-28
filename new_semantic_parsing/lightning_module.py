@@ -266,7 +266,11 @@ class PointerModule(LightningModule):
     # --- Internal
 
     def cuda(self, device=None):
-        self.model.initial_params = {k: p.to(device) for k, p in self.model.initial_params.items()}
+        if self.model.config.move_norm is not None:
+            self.model.initial_params = {
+                k: p.to(device) for k, p in self.model.initial_params.items()
+            }
+
         return super(PointerModule, self).cuda(device)
 
     @staticmethod
