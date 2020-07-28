@@ -262,6 +262,10 @@ class PointerModule(LightningModule):
 
     # --- Internal
 
+    def cuda(self, device=None):
+        self.model.initial_params = {k: p.to(device) for k, p in self.model.initial_params.items()}
+        return super(PointerModule, self).cuda(device)
+
     @staticmethod
     def _average_logs(logs):
         keys = logs[0].keys()
