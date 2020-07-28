@@ -428,7 +428,7 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
             loss = self.label_smoothing_loss_layer(input, target, mask)
 
         if self.config.move_norm is not None:
-            loss += self.config.move_norm * self._get_move_norm()
+            loss += self.config.move_norm * self.get_move_norm()
 
         return loss
 
@@ -484,7 +484,7 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
         for name, param in self.lm_head.named_parameters():
             param.requires_grad = value
 
-    def _get_move_norm(self):
+    def get_move_norm(self):
         norm = 0
 
         for n, p1 in self.named_parameters():

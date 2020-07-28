@@ -398,7 +398,7 @@ class EncoderDecoderWPointerTest(unittest.TestCase):
             self.assertTrue(torch.any(p2 != p1), msg=n)
 
         # check norm computation
-        norm = model._get_move_norm()
+        norm = model.get_move_norm()
         self.assertGreater(norm, 0)
 
     def test_move_norm_update(self):
