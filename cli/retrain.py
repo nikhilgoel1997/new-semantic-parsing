@@ -319,6 +319,10 @@ def main(args):
     checkpoint["global_step"] = -1
     checkpoint["epoch"] = -1
 
+    if args.weight_decay is not None:
+        # PointerModule has a single optimizer
+        set_weight_decay(checkpoint["optimizer_states"][0]["param_groups"], args.weight_decay)
+
     initial_checkpoint_path = path_join(args.output_dir, "initial_checkpoint.pl")
     torch.save(checkpoint, initial_checkpoint_path)
 
@@ -342,19 +346,14 @@ def main(args):
     out["global_step"] = -1
     wandb_logger.log_metrics(out)
 
-    # optimizer weight_decay value determined by the checkpoint
-    # it is simpler to change it here than in the checkpoint
-    # because checkpoint format is not obvious for this parameter
-    if args.weight_decay is not None:
-        # PointerModule has a single optimizer
-        set_weight_decay(trainer.optimizers[0].param_groups, args.weight_decay)
-
     wandb_logger.watch(lightning_module, log="all", log_freq=lightning_module.log_every)
 
     # --- FIT
     utils.check_config(lightning_module, trainer, args, strict=True)
 
     trainer.fit(lightning_module)
+
+    utils.check_config(lightning_module, trainer, args, strict=True)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
