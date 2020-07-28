@@ -363,6 +363,7 @@ def main(args):
     best_model_dir = os.path.dirname(checkpoint_callback.last_checkpoint_path)
     model = EncoderDecoderWPointerModel.from_pretrained(best_model_dir)
     model = model.to(device)
+    model.eval()
 
     # \/ \/ copy of the train.py
 

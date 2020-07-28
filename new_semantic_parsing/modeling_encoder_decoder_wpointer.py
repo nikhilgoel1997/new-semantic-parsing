@@ -381,7 +381,9 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
 
         # NOTE: this implementaion is computationally inefficient during inference
         attention_scores = query @ keys.transpose(1, 2)  # (bs, tgt_len, src_len)
-        attention_scores = F.dropout(attention_scores, p=self.config.dropout)
+        attention_scores = F.dropout(
+            attention_scores, p=self.config.dropout, training=self.training
+        )
 
         # mask becomes 0 for all 1 (keep) positions and -1e4 in all 0 (mask) positions
         # NOTE: we can use this mask to additionaly guide the model
@@ -400,7 +402,9 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
         assert attention_scores.shape == attention_scores_shape, "attention scores changed shape"
 
         # NOTE: maybe add some kind of normalization between dec_logits?
-        decoder_hidden_states = F.dropout(decoder_hidden_states, p=self.config.dropout)
+        decoder_hidden_states = F.dropout(
+            decoder_hidden_states, p=self.config.dropout, training=self.training
+        )
         decoder_logits = self.lm_head(decoder_hidden_states)  # (bs, tgt_len, tgt_vocab_size)
         combined_logits = torch.cat([decoder_logits, attention_scores], dim=-1)
 

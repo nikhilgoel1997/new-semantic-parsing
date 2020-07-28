@@ -47,6 +47,7 @@ class LightningModuleTest(unittest.TestCase):
             src_vocab_size=src_tokenizer.vocab_size,
             tgt_vocab_size=self.schema_tokenizer.vocab_size,
             max_src_len=17,
+            dropout=0.1,
         )
 
         source_texts = [
@@ -87,8 +88,14 @@ class LightningModuleTest(unittest.TestCase):
         self.assertIsInstance(loss, torch.FloatTensor)
 
     def test_validation_step(self):
-        out = self.module.validation_step(batch=self.test_batch, batch_idx=0)
-        self.assertIsInstance(out["eval_exact_match"], torch.FloatTensor)
+        self.module.eval()
+        assert self.model.config.dropout > 0
+
+        out1 = self.module.validation_step(batch=self.test_batch, batch_idx=0)
+        out2 = self.module.validation_step(batch=self.test_batch, batch_idx=0)
+
+        self.assertTrue(torch.allclose(out1["eval_exact_match"], out2["eval_exact_match"]))
+        self.assertIsInstance(out1["eval_exact_match"], torch.FloatTensor)
 
     def test_validation_epoch_end(self):
         validation_step_outputs = 3 * [
