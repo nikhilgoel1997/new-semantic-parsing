@@ -223,6 +223,7 @@ def main(args):
         model_config.label_smoothing = args.label_smoothing
 
     model = EncoderDecoderWPointerModel.from_pretrained(args.model_dir, config=model_config)
+    model.reset_move_norm()
 
     new_classes = None
     if args.new_classes_file is not None:
@@ -350,6 +351,8 @@ def main(args):
 
     # --- FIT
     utils.check_config(lightning_module, trainer, args, strict=True)
+    if model.config.move_norm is not None:
+        assert torch.allclose(model.get_move_norm(), torch.zeros(1))
 
     trainer.fit(lightning_module)
 

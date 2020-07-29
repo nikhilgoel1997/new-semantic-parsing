@@ -122,8 +122,9 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
                 eps=self.config.label_smoothing
             )
 
+        self.initial_params = None
         if self.config.move_norm is not None:
-            self.initial_params = {n: p.detach().clone() for n, p in self.named_parameters()}
+            self.reset_move_norm()  # set initial_params
 
     def to(self, *args, **kwargs):
         if hasattr(self, "initial_params") and self.initial_params is not None:
@@ -493,3 +494,6 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
 
         norm /= len(self.initial_params)
         return norm
+
+    def reset_move_norm(self):
+        self.initial_params = {n: p.detach().clone() for n, p in self.named_parameters()}
