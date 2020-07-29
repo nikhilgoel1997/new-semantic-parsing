@@ -337,7 +337,7 @@ def main(args):
         row_log_interval=args.log_every,
         limit_val_batches=args.eval_data_amount,
         callbacks=[lr_logger],
-        min_steps=args.min_epochs,
+        min_epochs=args.min_epochs,
     )
 
     # --- FIT
