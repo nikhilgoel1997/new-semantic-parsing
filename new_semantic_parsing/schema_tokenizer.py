@@ -28,6 +28,9 @@ import transformers
 
 from new_semantic_parsing import utils
 from new_semantic_parsing.dataclasses import SchemaItem, PairItem
+from new_semantic_parsing.configuration_encoder_decoder_wpointer import (
+    EncoderDecoderWPointerConfig,
+)
 
 
 class TopSchemaTokenizer:
@@ -169,14 +172,14 @@ class TopSchemaTokenizer:
 
         return SchemaItem(schema_ids, pointer_mask)
 
-    def decode(self, ids, source_ids, skip_special_tokens=True):
+    def decode(self, ids, source_ids=None, skip_special_tokens=True, return_tokens=False):
         schema = []
         # we combine text into chunks to that it would be easier to merge bpe tokens into words
         text_chunk_ids = []
 
         for i in ids:
             if i < self.vocab_size:
-                if text_chunk_ids:
+                if text_chunk_ids and source_ids is not None:
                     schema.append(self.src_tokenizer.decode(text_chunk_ids))
                     text_chunk_ids = []
 
@@ -185,7 +188,14 @@ class TopSchemaTokenizer:
                 schema.append(self._itos[i])
             else:
                 position = i - self.vocab_size
-                text_chunk_ids.append(source_ids[position])
+                if source_ids is not None:
+                    text_chunk_ids.append(source_ids[position])
+                else:
+                    schema.append(f"@ptr{position}")
+
+        if return_tokens:
+            return schema
+
         schema = self.detokenize(schema)
         return schema
 
@@ -203,7 +213,7 @@ class TopSchemaTokenizer:
     def encode_source(self, source_text):
         return self.src_tokenizer.encode(source_text)
 
-    def save(self, path, encoder_model_type):
+    def save(self, path, encoder_model_type=None):
         """
         Save schema tokenizer and text tokenizer
         Needs pre-trained encoder model type - this is a workaround for Transformers #4197
@@ -215,6 +225,9 @@ class TopSchemaTokenizer:
 
         self.src_tokenizer.save_pretrained(path)
 
+        if encoder_model_type is None:
+            return
+
         with open(path_join(path, "config.json"), "w") as f:
             json.dump({"model_type": encoder_model_type}, f)
 
@@ -223,7 +236,19 @@ class TopSchemaTokenizer:
         with open(path_join(path, "schema_vocab.txt")) as f:
             schema_vocab = set(f.read().strip("\n").split("\n"))
 
-        text_tokenizer = transformers.AutoTokenizer.from_pretrained(path)
+        if not os.path.exists(path_join(path, "config.json")):
+            raise RuntimeError(
+                f"{path_join(path, 'config.json')} is required for tokenizer loading"
+            )
+
+        try:
+            config = transformers.AutoConfig.from_pretrained(path)
+        except KeyError:
+            # config with custom model_type raises KeyError
+            config = EncoderDecoderWPointerConfig.from_pretrained(path)
+            config = config.encoder
+
+        text_tokenizer = transformers.AutoTokenizer.from_pretrained(path, config=config)
 
         return cls(schema_vocab, text_tokenizer)
 

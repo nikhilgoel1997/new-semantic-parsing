@@ -174,9 +174,10 @@ def get_noam_schedule_with_gradual_unfreezing(
             set_encoder_requires_grad(optimizer.param_groups, True)
 
         current_step = max(current_step, 1)
+        _num_warmup_steps = max(num_warmup_steps, 1)
 
         scale = model_size ** -0.5 * min(
-            current_step ** (-0.5), current_step * num_warmup_steps ** (-1.5)
+            current_step ** (-0.5), current_step * _num_warmup_steps ** (-1.5)
         )
         return scale
 

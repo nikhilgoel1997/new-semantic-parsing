@@ -31,6 +31,7 @@ import transformers
 import pandas as pd
 from tqdm.auto import tqdm
 
+import new_semantic_parsing.data
 from new_semantic_parsing import (
     EncoderDecoderWPointerModel,
     TopSchemaTokenizer,
@@ -77,7 +78,7 @@ def parse_args(args=None):
     # fmt: on
 
     args = parser.parse_args(args)
-    args.schema_tokenizer = args.schema_tokenizer or path_join(args.model, "tokenizer")
+    args.schema_tokenizer = args.schema_tokenizer or args.model
 
     if os.path.exists(args.output_file):
         raise ValueError(f"output file {args.output_file} already exists")
@@ -86,25 +87,6 @@ def parse_args(args=None):
         args.device = "cuda" if torch.cuda.is_available() else "cpu"
 
     return args
-
-
-def make_test_dataset(filepath, schema_tokenizer, max_len=None):
-    data = pd.read_table(filepath, names=["text", "tokens", "schema"])
-
-    text_ids: List[list] = [
-        schema_tokenizer.encode_source(text) for text in tqdm(data.tokens, desc="tokenization")
-    ]
-    if max_len is not None:
-        text_ids = [t[:max_len] for t in text_ids]
-
-    text_pointer_masks: List[list] = [
-        utils.get_src_pointer_mask(t, text_tokenizer) for t in text_ids
-    ]
-
-    dataset = PointerDataset(source_tensors=text_ids, source_pointer_masks=text_pointer_masks)
-    dataset.torchify()
-
-    return dataset
 
 
 if __name__ == "__main__":
@@ -117,7 +99,7 @@ if __name__ == "__main__":
     logger.info("Loading data")
 
     # NOTE: this dataset object does not have labels
-    dataset: PointerDataset = make_test_dataset(
+    dataset: PointerDataset = new_semantic_parsing.data.make_test_dataset(
         args.data, schema_tokenizer, max_len=args.src_max_len
     )
     dataloader = torch.utils.data.DataLoader(

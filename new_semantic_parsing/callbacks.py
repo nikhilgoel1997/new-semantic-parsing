@@ -17,23 +17,23 @@
 import os
 from pytorch_lightning import callbacks
 
-from new_semantic_parsing.lightning_module import PointerModule
 
-
-class TransformersModelCheckpoint(callbacks.Callback):
-    """Saves model in Transformers format.
+class TransformersModelCheckpoint(callbacks.ModelCheckpoint):
+    """Saves model and tokenizer in Transformers format when ModelCheckpoint does save.
 
     This way it is possible to simply load the model (without training hparameters)
-    using transformers.from_pretrained.
+    using transformers.from_pretrained. Also adds an attribute .last_checkpoint_path.
     """
 
-    def __init__(self, output_dir):
-        self.output_dir = output_dir
+    def on_train_start(self, trainer, pl_module):
+        super(TransformersModelCheckpoint, self).on_train_start(trainer, pl_module)
+        self._model = pl_module.model
+        self._tokenizer = pl_module.schema_tokenizer
 
-    def on_epoch_end(self, trainer, pl_module: PointerModule):
-        """Saves model on epoch eng. Overrrides the previous checkpoint."""
-        pl_module.model.save_pretrained(self.output_dir)
-        # TODO: hardcode, encoder_model_type
-        pl_module.schema_tokenizer.save(
-            os.path.join(self.output_dir, "tokenizer"), encoder_model_type="bert"
-        )
+    def _save_model(self, filepath):
+        super(TransformersModelCheckpoint, self)._save_model(filepath)
+        self.last_checkpoint_path = filepath
+
+        save_path = os.path.dirname(filepath)
+        self._model.save_pretrained(save_path)
+        self._tokenizer.save(save_path)
