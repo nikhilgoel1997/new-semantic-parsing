@@ -352,7 +352,7 @@ def main(args):
     # --- FIT
     utils.check_config(lightning_module, trainer, args, strict=True)
     if model.config.move_norm is not None:
-        assert torch.allclose(model.get_move_norm(), torch.zeros(1))
+        assert torch.allclose(model.get_move_norm(), torch.zeros(1, device=model.device))
 
     trainer.fit(lightning_module)
 
