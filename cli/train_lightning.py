@@ -104,6 +104,7 @@ def parse_args(args=None):
     parser.add_argument('--epochs', default=1, type=int)
     parser.add_argument('--early-stopping', default=None, type=int,
                         help='Lightning-only. Early stopping patience. No early stopping by default.')
+    parser.add_argument('--min-epochs', default=1, type=int)
     parser.add_argument('--seed', default=1, type=int)
     parser.add_argument('--lr', default=None, type=float,
                         help='By default, lr is chosen according to the Scaling Laws for Neural Language Models')
@@ -141,6 +142,8 @@ def parse_args(args=None):
     parser.add_argument('--fp16', default=False, action='store_true')
     parser.add_argument('--gpus', default=None, type=int,
                         help='Lightning-only. Number of gpus to train the model on')
+    parser.add_argument('--split-amount-finetune', default=None, type=float,
+                        help='Only used for logging, amount of data that was removed from the training set')
 
     # fmt: on
 
@@ -155,6 +158,9 @@ def parse_args(args=None):
     args.decoder_heads = args.decoder_heads or args.heads
     args.wandb_project = args.wandb_project or "new_semantic_parsing"
     args.tags = args.tags.split(",") if args.tags else []  # list is required by wandb interface
+
+    if args.split_amount_finetune is not None:
+        args.split_amount_train = 1.0 - args.split_amount_finetune
 
     if args.gpus is None:
         args.gpus = 1 if torch.cuda.is_available() else 0
@@ -329,6 +335,7 @@ def main(args):
         row_log_interval=args.log_every,
         limit_val_batches=args.eval_data_amount,
         callbacks=[lr_logger],
+        min_steps=args.min_epochs,
     )
 
     # --- FIT
