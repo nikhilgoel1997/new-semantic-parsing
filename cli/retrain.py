@@ -89,9 +89,12 @@ def parse_args(args=None):
 
     # training
     parser.add_argument('--epochs', default=1, type=int)
+    parser.add_argument('--min-epochs', default=1, type=int)
+    parser.add_argument('--max-steps', default=None, type=int)
+    parser.add_argument('--min-steps', default=None, type=int)
     parser.add_argument('--early-stopping', default=None, type=int,
                         help='Early stopping patience. No early stopping by default.')
-    parser.add_argument('--min-epochs', default=1, type=int)
+
     parser.add_argument('--seed', default=1, type=int)
     parser.add_argument('--lr', default=None, type=float,
                         help='By default, checkpoint lr is used.')
@@ -99,6 +102,7 @@ def parse_args(args=None):
                         help='Encoder learning rate, overrides --lr')
     parser.add_argument('--decoder-lr', default=None, type=float,
                         help='Decoder learning rate, overrides --lr')
+
     parser.add_argument('--weight-decay', default=None, type=float)
     parser.add_argument('--move-norm', default=None, type=float,
                         help='regularization coefficient for the distance between the initial and current network')
@@ -341,13 +345,15 @@ def main(args):
         resume_from_checkpoint=initial_checkpoint_path,
         logger=wandb_logger,
         max_epochs=args.epochs,
+        min_epochs=args.min_epochs,
+        max_steps=args.max_steps,
+        min_steps=args.min_steps,
         checkpoint_callback=checkpoint_callback,
         early_stop_callback=early_stopping,
         precision=16 if args.fp16 else 32,
         callbacks=[lr_logger],
         row_log_interval=1,
         limit_val_batches=args.eval_data_amount,
-        min_epochs=args.min_epochs,
         **trainer_kwargs,
     )
 

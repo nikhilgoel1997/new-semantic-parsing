@@ -102,9 +102,12 @@ def parse_args(args=None):
 
     # training
     parser.add_argument('--epochs', default=1, type=int)
+    parser.add_argument('--min-epochs', default=1, type=int)
+    parser.add_argument('--max-steps', default=None, type=int)
+    parser.add_argument('--min-steps', default=None, type=int)
     parser.add_argument('--early-stopping', default=None, type=int,
                         help='Lightning-only. Early stopping patience. No early stopping by default.')
-    parser.add_argument('--min-epochs', default=1, type=int)
+
     parser.add_argument('--seed', default=1, type=int)
     parser.add_argument('--lr', default=None, type=float,
                         help='By default, lr is chosen according to the Scaling Laws for Neural Language Models')
@@ -112,6 +115,7 @@ def parse_args(args=None):
                         help='Encoder learning rate, overrides --lr')
     parser.add_argument('--decoder-lr', default=None, type=float,
                         help='Decoder learning rate, overrides --lr')
+
     parser.add_argument('--weight-decay', default=0, type=float)
     parser.add_argument('--dropout', default=0.1, type=float,
                         help='dropout amount for the encoder, decoder and head, default value 0.1 is from Transformers')
@@ -328,6 +332,9 @@ def main(args):
     trainer = Trainer(
         logger=wandb_logger,
         max_epochs=args.epochs,
+        min_epochs=args.min_epochs,
+        max_steps=args.max_steps,
+        min_steps=args.min_steps,
         gpus=args.gpus,
         accumulate_grad_batches=args.gradient_accumulation_steps,
         checkpoint_callback=checkpoint_callback,
@@ -337,7 +344,6 @@ def main(args):
         row_log_interval=args.log_every,
         limit_val_batches=args.eval_data_amount,
         callbacks=[lr_logger],
-        min_epochs=args.min_epochs,
     )
 
     # --- FIT
