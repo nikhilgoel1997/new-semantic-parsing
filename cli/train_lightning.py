@@ -280,6 +280,8 @@ def main(args):
 
     freezing_schedule = EncDecFreezingSchedule.from_args(args)
 
+    wandb_logger.log_hyperparams({"num_data": len(train_dataset)})
+
     lightning_module = PointerModule(
         model=model,
         schema_tokenizer=schema_tokenizer,

@@ -243,6 +243,8 @@ def main(args):
     if args.new_data_amount is not None and args.new_data_amount < 1.0:
         train_subset = utils.make_subset(train_subset, args.new_data_amount)
 
+    wandb_logger.log_hyperparams({"num_new_data": len(train_subset)})
+
     if args.old_data_amount > 0:
         if args.old_data_sampling_method == SamplingMethods.merge_subset:
             old_data_subset = utils.make_subset(datasets["train_dataset"], args.old_data_amount)
@@ -253,6 +255,8 @@ def main(args):
             )
         else:
             raise ValueError(args.old_data_sampling_method)
+
+    wandb_logger.log_hyperparams({"num_total_data": len(train_subset)})
 
     # Lightning loads all params which are not specified in .load_from_checkpoint
     # thus, some arguments are only provided if we want to override the loaded values
