@@ -309,8 +309,8 @@ class PointerModule(LightningModule):
 
         act = self.freezing_schedule.freeze_head
         if act is not None and step == act:
-            self.model.freeze_head(freeze=True, ignore_ids=self.freezing_schedule.ignore_ids)
+            self.model.freeze_head(freeze=True)
 
         act = self.freezing_schedule.unfreeze_head
         if act is not None and step == act:
-            self.model.freeze_head(freeze=False, ignore_ids=self.freezing_schedule.ignore_ids)
+            self.model.freeze_head(freeze=False)
