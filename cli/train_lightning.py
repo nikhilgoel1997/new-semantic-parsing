@@ -142,6 +142,8 @@ def parse_args(args=None):
     # misc
     parser.add_argument('--wandb-project', default=None)
     parser.add_argument('--log-every', default=100, type=int)
+    parser.add_argument('--val-every', default=1.0, type=int,
+                        help='validate every number of iterations, by default evaluate at the end the epoch')
     parser.add_argument('--tags', default=None)
     parser.add_argument('--fp16', default=False, action='store_true')
     parser.add_argument('--gpus', default=None, type=int,
@@ -342,6 +344,7 @@ def main(args):
         gradient_clip_val=args.max_grad_norm,
         precision=16 if args.fp16 else 32,
         row_log_interval=args.log_every,
+        val_check_interval=args.val_every,
         limit_val_batches=args.eval_data_amount,
         callbacks=[lr_logger],
     )

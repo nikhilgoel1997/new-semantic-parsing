@@ -69,17 +69,18 @@ def parse_args(args=None):
                              'data.pkl, and args.toml')
     parser.add_argument('--output-dir', default=None,
                         help='directory to store checkpoints and other output files')
+    parser.add_argument('--eval-data-amount', default=1., type=float,
+                        help='amount of validation set to use when training. '
+                             'The final evaluation will use the full dataset.')
     parser.add_argument('--new-classes-file', default=None,
                         help='path to a text file with names of classes to track, one class per line')
+
     parser.add_argument('--new-data-amount', default=1., type=float,
                         help='amount of new data (finetune_set) to train on, 0 < amount <= 1')
     parser.add_argument('--old-data-amount', default=0., type=float,
                         help='amount of old data (train_set) to train on, only values from {0, 1} are supported')
     parser.add_argument('--old-data-sampling-method', default='merge_subset',
                         help='how to sample from old data')
-    parser.add_argument('--eval-data-amount', default=1., type=float,
-                        help='amount of validation set to use when training. '
-                             'The final evaluation will use the full dataset.')
 
     # model
     parser.add_argument('--model-dir', required=True,
@@ -132,6 +133,8 @@ def parse_args(args=None):
     # misc
     parser.add_argument('--wandb-project', default=None)
     parser.add_argument('--log-every', default=None, type=int)
+    parser.add_argument('--val-every', default=1.0, type=int,
+                        help='validate every number of iterations, by default evaluate at the end the epoch')
     parser.add_argument('--tags', default=None)
     parser.add_argument('--fp16', default=False, action='store_true')
     parser.add_argument('--gpus', default=None, type=int,
@@ -354,6 +357,7 @@ def main(args):
         callbacks=[lr_logger],
         row_log_interval=1,
         limit_val_batches=args.eval_data_amount,
+        val_check_interval=args.val_every,
         **trainer_kwargs,
     )
 
