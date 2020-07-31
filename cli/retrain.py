@@ -107,7 +107,7 @@ def parse_args(args=None):
     parser.add_argument('--weight-decay', default=None, type=float)
     parser.add_argument('--move-norm', default=None, type=float,
                         help='regularization coefficient for the distance between the initial and current network')
-    parser.add_argument('--move-norm-p', default=2, type=float,
+    parser.add_argument('--move-norm-p', default=2, type=int,
                         help='p of the L-p norm used in move-norm regularization')
     parser.add_argument('--dropout', default=None, type=float,
                         help='dropout amount for the encoder and decoder, by defalut checkpoint value is used')
@@ -234,6 +234,8 @@ def main(args):
         model_config.set_dropout(args.dropout)
     if args.move_norm is not None:
         model_config.move_norm = args.move_norm
+    if args.move_norm_p is not None:
+        model_config.move_norm_p = args.move_norm_p
     if args.label_smoothing is not None:
         model_config.label_smoothing = args.label_smoothing
 
@@ -360,7 +362,6 @@ def main(args):
         row_log_interval=1,
         limit_val_batches=args.eval_data_amount,
         val_check_interval=args.val_every,
-        check_val_every_n_epoch=args.val_every_epoch,
         **trainer_kwargs,
     )
 
