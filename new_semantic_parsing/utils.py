@@ -213,6 +213,7 @@ def check_config(pointer_module, trainer, args, strict=False):
 
     if getattr(args, "move_norm", None) is not None or strict:
         assert _cfg.move_norm == args.move_norm
+        assert _cfg.move_norm_p == args.move_norm_p
 
     if args.label_smoothing is not None:
         assert _cfg.label_smoothing == args.label_smoothing

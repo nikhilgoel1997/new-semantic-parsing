@@ -142,8 +142,6 @@ def parse_args(args=None):
     # misc
     parser.add_argument('--wandb-project', default=None)
     parser.add_argument('--log-every', default=100, type=int)
-    parser.add_argument('--val-every', default=1.0, type=int,
-                        help='validate every number of iterations, by default evaluate at the end the epoch')
     parser.add_argument('--tags', default=None)
     parser.add_argument('--fp16', default=False, action='store_true')
     parser.add_argument('--gpus', default=None, type=int,
