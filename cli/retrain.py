@@ -14,8 +14,8 @@
 # =============================================================================
 """Finetune a trained model on a dataset.
 
-Similar to train_lightning.py, but loads the model from checkpoint instead of
-creating it and preprocesses the data.
+Similar to train_lightning.py, but loads the model and trainer from checkpoint
+and uses finetune_set instead of train_set from the data.pkl
 """
 
 import os
@@ -28,7 +28,6 @@ from os.path import join as path_join
 
 import toml
 import torch
-import transformers
 
 from pytorch_lightning import Trainer
 from pytorch_lightning import callbacks
@@ -39,7 +38,7 @@ from new_semantic_parsing import (
     TopSchemaTokenizer,
 )
 from new_semantic_parsing import utils, SAVE_FORMAT_VERSION, EncoderDecoderWPointerConfig
-from new_semantic_parsing.data import PointerDataset, Seq2SeqDataCollator, SampleConcatSubset
+from new_semantic_parsing.data import PointerDataset, SampleConcatSubset
 from new_semantic_parsing.callbacks import TransformersModelCheckpoint
 from new_semantic_parsing.dataclasses import EncDecFreezingSchedule, SamplingMethods
 from new_semantic_parsing.optimization import get_optimizers, set_weight_decay
@@ -53,7 +52,7 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 logger = logging.getLogger(__file__)
-
+logging.getLogger("transformers.configuration_utils").setLevel(logging.WARNING)
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -135,8 +134,6 @@ def parse_args(args=None):
     # misc
     parser.add_argument('--wandb-project', default=None)
     parser.add_argument('--log-every', default=None, type=int)
-    parser.add_argument('--val-every', default=1.0, type=int,
-                        help='validate every number of iterations, by default evaluate at the end the epoch')
     parser.add_argument('--tags', default=None)
     parser.add_argument('--fp16', default=False, action='store_true')
     parser.add_argument('--gpus', default=None, type=int,
@@ -202,8 +199,6 @@ def main(args):
     else:
         raise ValueError("Tokenizer is not found in both --model-dir and --data-dir")
 
-    text_tokenizer: transformers.PreTrainedTokenizer = schema_tokenizer.src_tokenizer
-
     logger.info("Loading data")
 
     datasets = torch.load(path_join(args.data_dir, "data.pkl"))
@@ -226,8 +221,28 @@ def main(args):
                 "Binary data version differs from the current version. "
                 "May cause failing and unexpected behavior"
             )
+            wandb_logger.log_hyperparams({"pretrain_" + k: v for k, v in train_args.items()})
 
-    logger.info("Creating a model")
+    train_subset = train_dataset
+    if args.new_data_amount is not None and args.new_data_amount < 1.0:
+        train_subset = utils.make_subset(train_subset, args.new_data_amount)
+
+    wandb_logger.log_hyperparams({"num_new_data": len(train_subset)})
+
+    if args.old_data_amount > 0:
+        if args.old_data_sampling_method == SamplingMethods.merge_subset:
+            old_data_subset = utils.make_subset(datasets["train_dataset"], args.old_data_amount)
+            train_subset = torch.utils.data.ConcatDataset([train_subset, old_data_subset])
+        elif args.old_data_sampling_method == SamplingMethods.sample:
+            train_subset = SampleConcatSubset(
+                train_subset, datasets["train_dataset"], args.old_data_amount
+            )
+        else:
+            raise ValueError(args.old_data_sampling_method)
+
+    wandb_logger.log_hyperparams({"num_total_data": len(train_subset)})
+
+    logger.info("Loading model")
 
     model_config = EncoderDecoderWPointerConfig.from_pretrained(args.model_dir)
     if args.dropout is not None:
@@ -248,26 +263,7 @@ def main(args):
             new_classes = f.read().strip().split("\n")
             wandb_logger.log_hyperparams({"new_classes": " ".join(new_classes)})
 
-    logger.info("Starting training")
-
-    train_subset = train_dataset
-    if args.new_data_amount is not None and args.new_data_amount < 1.0:
-        train_subset = utils.make_subset(train_subset, args.new_data_amount)
-
-    wandb_logger.log_hyperparams({"num_new_data": len(train_subset)})
-
-    if args.old_data_amount > 0:
-        if args.old_data_sampling_method == SamplingMethods.merge_subset:
-            old_data_subset = utils.make_subset(datasets["train_dataset"], args.old_data_amount)
-            train_subset = torch.utils.data.ConcatDataset([train_subset, old_data_subset])
-        elif args.old_data_sampling_method == SamplingMethods.sample:
-            train_subset = SampleConcatSubset(
-                train_subset, datasets["train_dataset"], args.old_data_amount
-            )
-        else:
-            raise ValueError(args.old_data_sampling_method)
-
-    wandb_logger.log_hyperparams({"num_total_data": len(train_subset)})
+    logger.info("Preparing for training")
 
     # Lightning loads all params which are not specified in .load_from_checkpoint
     # thus, some arguments are only provided if we want to override the loaded values
@@ -292,7 +288,7 @@ def main(args):
         **module_kwargs,
     )
 
-    # there is a werid bug (feature?) that checkpoint_callback creates checkpoints
+    # there is a werid bug that checkpoint_callback creates checkpoints
     # in the filepath subfolder, e.g. if you specify filepath=output_dir
     # the checkpoints will be created in output_dir/..
     # NOTE: we need save_top_k=1 fot checkpoint_callback.last_checkpoint_path
@@ -312,12 +308,13 @@ def main(args):
             monitor="eval_exact_match",
             patience=args.early_stopping,
             strict=False,
-            verbose=True,
+            verbose=False,
             mode="max",
         )
 
     lr_logger = callbacks.LearningRateLogger()
 
+    # overload some of the Trainer arguments if they are provided to the script
     trainer_kwargs = {
         "gradient_clip_val": args.max_grad_norm,
         "gpus": args.gpus,
@@ -361,7 +358,6 @@ def main(args):
         callbacks=[lr_logger],
         row_log_interval=1,
         limit_val_batches=args.eval_data_amount,
-        val_check_interval=args.val_every,
         **trainer_kwargs,
     )
 
@@ -383,50 +379,32 @@ def main(args):
 
     utils.check_config(lightning_module, trainer, args, strict=True)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    # top_k == 1 --> the last checkpoint is the best model
-    assert checkpoint_callback.save_top_k == 1
-    best_model_dir = os.path.dirname(checkpoint_callback.last_checkpoint_path)
-    model = EncoderDecoderWPointerModel.from_pretrained(best_model_dir)
-    model = model.to(device)
-    model.eval()
-
-    # \/ \/ copy of the train.py
-
     with open(path_join(args.output_dir, "args.toml"), "w") as f:
         args_dict = {"version": SAVE_FORMAT_VERSION, **vars(args)}
         toml.dump(args_dict, f)
 
     logger.info("Training finished!")
+    device = model.device
+    del model
 
-    logger.info("Generating predictions")
-    dataloader = torch.utils.data.DataLoader(
-        eval_dataset,
-        batch_size=lightning_module.batch_size,
-        collate_fn=Seq2SeqDataCollator(pad_id=text_tokenizer.pad_token_id).collate_batch,
-        num_workers=8,
-    )
+    # top_k == 1 --> the last checkpoint is the best model
+    assert checkpoint_callback.save_top_k == 1
+    best_model_dir = os.path.dirname(checkpoint_callback.last_checkpoint_path)
+    logger.info(f"Loading the best model from {best_model_dir}")
 
-    predictions_ids, predictions_str = utils.iterative_prediction(
-        model=model,
-        dataloader=dataloader,
-        schema_tokenizer=schema_tokenizer,
-        max_len=63,
-        num_beams=1,
-        device=device,
-    )
+    model = EncoderDecoderWPointerModel.from_pretrained(best_model_dir)
+    model = model.to(device)
+    model.eval()
 
-    logger.info("Computing evaluation metrics on full dataset")
+    logger.info("Computing final evaluation metrics on full dataset")
 
-    targets_ids = [list(ex.labels.numpy()[:-1]) for ex in eval_dataset]
+    final_logs = trainer.test(lightning_module, lightning_module.val_dataloader())
+    final_logs = {"best" + k.lstrip("test"): v for k, v in final_logs["test_metrics"].items()}
 
-    exact_match_ids = sum(
-        int(str(p) == str(l)) for p, l in zip(predictions_ids, targets_ids)
-    ) / len(eval_dataset)
+    for k, v in final_logs.items():
+        logger.info(f"{k}\t: {v}")
 
-    logger.info(f"Exact match (ids): {exact_match_ids}")
-    wandb_logger._experiment.summary["best_eval_exact_match"] = exact_match_ids
+    wandb_logger.log_metrics(final_logs)
     wandb_logger.close()
 
     if args.clean_output:

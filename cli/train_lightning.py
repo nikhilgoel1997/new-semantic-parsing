@@ -29,7 +29,6 @@ import toml
 import torch
 import wandb
 import transformers
-import pandas as pd
 
 from pytorch_lightning import Trainer
 from pytorch_lightning import callbacks
@@ -40,7 +39,7 @@ from new_semantic_parsing import (
     TopSchemaTokenizer,
 )
 from new_semantic_parsing import utils, SAVE_FORMAT_VERSION
-from new_semantic_parsing.data import PointerDataset, Seq2SeqDataCollator
+from new_semantic_parsing.data import PointerDataset
 from new_semantic_parsing.callbacks import TransformersModelCheckpoint
 from new_semantic_parsing.dataclasses import EncDecFreezingSchedule
 from new_semantic_parsing.lightning_module import PointerModule
@@ -53,6 +52,7 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 logger = logging.getLogger(__file__)
+logging.getLogger("transformers.configuration_utils").setLevel(logging.WARNING)
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -68,7 +68,7 @@ def parse_args(args=None):
                              'data.pkl, and args.toml')
     parser.add_argument('--output-dir', default=None,
                         help='directory to store checkpoints and other output files')
-    parser.add_argument('--eval-data-amount', default=0.7, type=float,
+    parser.add_argument('--eval-data-amount', default=0.5, type=float,
                         help='amount of validation set to use when training. '
                              'The final evaluation will use the full dataset.')
     parser.add_argument('--new-classes-file', default=None,
@@ -156,6 +156,9 @@ def parse_args(args=None):
     # set defaults for None fields
     if (args.encoder_lr is not None) ^ (args.decoder_lr is not None):
         raise ValueError("--encoder-lr and --decoder-lr should be both specified")
+
+    if args.encoder_lr is not None:
+        args.lr = {"encoder_lr": args.encoder_lr, "decoder_lr": args.decoder_lr}
 
     args.decoder_layers = args.decoder_layers or args.layers
     args.decoder_hidden = args.decoder_hidden or args.hidden
@@ -274,11 +277,7 @@ def main(args):
             new_classes = f.read().strip().split("\n")
             wandb_logger.log_hyperparams({"new_classes": " ".join(new_classes)})
 
-    logger.info("Starting training")
-    lr = args.lr or utils.get_lr(model)
-
-    if args.encoder_lr is not None and args.decoder_lr is not None:
-        lr = {"encoder_lr": args.encoder_lr, "decoder_lr": args.decoder_lr}
+    logger.info("Preparing for training")
 
     adam_eps = 1e-7 if args.fp16 else 1e-9
 
@@ -291,7 +290,7 @@ def main(args):
         schema_tokenizer=schema_tokenizer,
         train_dataset=train_dataset,
         valid_dataset=eval_dataset,
-        lr=lr,
+        lr=args.lr,
         batch_size=args.batch_size,
         warmup_steps=args.warmup_steps,
         weight_decay=args.weight_decay,
@@ -342,7 +341,6 @@ def main(args):
         gradient_clip_val=args.max_grad_norm,
         precision=16 if args.fp16 else 32,
         row_log_interval=args.log_every,
-        val_check_interval=args.val_every,
         limit_val_batches=args.eval_data_amount,
         callbacks=[lr_logger],
     )
@@ -369,71 +367,28 @@ def main(args):
         toml.dump(args_dict, f)
 
     logger.info("Training finished!")
+    device = model.device
+    del model
 
-    logger.info("Generating predictions")
-    dataloader = torch.utils.data.DataLoader(
-        eval_dataset,
-        batch_size=args.batch_size,
-        collate_fn=Seq2SeqDataCollator(pad_id=text_tokenizer.pad_token_id).collate_batch,
-        num_workers=8,
-    )
+    # top_k == 1 --> the last checkpoint is the best model
+    assert checkpoint_callback.save_top_k == 1
+    best_model_dir = os.path.dirname(checkpoint_callback.last_checkpoint_path)
+    logger.info(f"Loading the best model from {best_model_dir}")
 
-    predictions_ids, predictions_str = utils.iterative_prediction(
-        model=model,
-        dataloader=dataloader,
-        schema_tokenizer=schema_tokenizer,
-        max_len=63,
-        num_beams=1,
-        device=device,
-    )
+    model = EncoderDecoderWPointerModel.from_pretrained(best_model_dir)
+    model = model.to(device)
+    model.eval()
 
-    # Finish the script if evaluation texts are not available
-    if preprocess_args is None:
-        exit()
+    logger.info("Computing final evaluation metrics on full dataset")
 
-    logger.info("Computing inference-time metrics")
+    final_logs = trainer.test(lightning_module, lightning_module.val_dataloader(subset_size=0.7))
 
-    data_df = pd.read_table(
-        path_join(preprocess_args["data"], "eval.tsv"), names=["text", "tokens", "schema"],
-    )
-    targets_str = list(data_df.schema)
+    final_logs = {"best" + k.lstrip("test"): v for k, v in final_logs["test_metrics"].items()}
 
-    predictions_str = [schema_tokenizer.postprocess(p) for p in predictions_str]
-    exact_match = sum(int(p == t) for p, t in zip(predictions_str, targets_str)) / len(targets_str)
-    logger.info(f"Exact match (str): {exact_match}")
+    for k, v in final_logs.items():
+        logger.info(f"{k}\t: {v}")
 
-    targets_ids = [list(ex.labels.numpy()[:-1]) for ex in eval_dataset]
-    exact_match_ids = sum(
-        int(str(p) == str(l)) for p, l in zip(predictions_ids, targets_ids)
-    ) / len(targets_str)
-    logger.info(f"Exact match (ids): {exact_match_ids}")
-
-    wandb_logger._experiment.summary["best_eval_exact_match"] = exact_match_ids
-
-    logger.info("Checking for mismatches between ids and str")
-
-    n_errors = 0
-
-    for i in range(len(targets_str)):
-        if (
-            str(predictions_ids[i]) == str(eval_dataset[i].labels.numpy()[:-1])
-            and predictions_str[i] != targets_str[i]
-        ):
-            n_errors += 1
-            logger.info("Mismatch ", n_errors)
-
-            logger.info("Target str: ", targets_str[i])
-            logger.info("Decoded   : ", predictions_str[i])
-
-            logger.info("Target ids : ", eval_dataset[i].labels)
-            logger.info("Predictions: ", predictions_ids[i])
-            logger.info("")
-
-    if n_errors > 0:
-        logger.info(f"Mismatches       : {n_errors}")
-        logger.info(f"Exact match (str): {exact_match}")
-        logger.info(f"Exact match (ids): {exact_match_ids}")
-
+    wandb_logger.log_metrics(final_logs)
     wandb_logger.close()
 
 

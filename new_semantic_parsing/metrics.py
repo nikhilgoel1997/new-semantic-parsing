@@ -168,7 +168,7 @@ class Tree:
 # Tree path scores
 
 
-def get_tree_path_metrics(pred_tokens, true_tokens, monitor_classes, prefix):
+def get_tree_path_metrics(pred_tokens, true_tokens, monitor_classes, prefix, do_each=False):
     """Get metrics for all classes, for monitor classes and for monitor_classes[0].
 
     Apply prefix to all keys.
@@ -178,6 +178,8 @@ def get_tree_path_metrics(pred_tokens, true_tokens, monitor_classes, prefix):
         true_tokens: List[List[str]]
         monitor_classes: List[str]
         prefix: str, will be appended to all return dict keys
+        do_each: bool, if False compute tree path metrics only for monitor_classes[0] and overall
+            if True compute tree path metrics for all monitor_classes and overall
 
     Returns:
         dictionary with keys
@@ -200,13 +202,16 @@ def get_tree_path_metrics(pred_tokens, true_tokens, monitor_classes, prefix):
             f"{prefix}_new_classes_{k}": v for k, v in tree_path_scores_new_cls.items()
         }
 
-        _main_class = monitor_classes[0]
-        tree_path_scores_new_cls_main = get_tree_path_scores(
-            pred_tokens=pred_tokens, true_tokens=true_tokens, classes=[_main_class]
-        )
-        tree_path_scores_new_cls_main = {
-            f"{prefix}_{_main_class}_{k}": v for k, v in tree_path_scores_new_cls_main.items()
-        }
+        for i, class_ in enumerate(monitor_classes):
+            if i > 0 and not do_each:
+                break
+
+            tree_path_scores_new_cls_main = get_tree_path_scores(
+                pred_tokens=pred_tokens, true_tokens=true_tokens, classes=[class_]
+            )
+            tree_path_scores_new_cls_main = {
+                f"{prefix}_{class_}_{k}": v for k, v in tree_path_scores_new_cls_main.items()
+            }
 
     tree_metrics = {
         **tree_path_scores,

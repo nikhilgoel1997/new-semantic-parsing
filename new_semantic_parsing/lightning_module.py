@@ -22,6 +22,7 @@ from torch.utils.data import DataLoader
 from pytorch_lightning import LightningModule
 
 import new_semantic_parsing.optimization as opt
+from new_semantic_parsing.utils import make_subset
 from new_semantic_parsing.data import PointerDataset, Seq2SeqDataCollator, SampleConcatSubset
 from new_semantic_parsing.metrics import compute_metrics_from_batch, get_tree_path_metrics
 from new_semantic_parsing.dataclasses import EncDecFreezingSchedule
@@ -181,59 +182,25 @@ class PointerModule(LightningModule):
 
     # --- Validation
 
-    def validation_step(self, batch, batch_idx, prefix="eval"):
-        prediction_batch: torch.LongTensor = self.model.generate(
-            input_ids=batch["input_ids"].to(self.device),
-            pointer_mask=batch["pointer_mask"].to(self.device),
-            attention_mask=batch["attention_mask"].to(self.device),
-            max_length=68,
-            num_beams=1,
-            pad_token_id=self.text_tokenizer.pad_token_id,
-            bos_token_id=self.schema_tokenizer.bos_token_id,
-            eos_token_id=self.schema_tokenizer.eos_token_id,
+    def validation_step(self, batch, batch_idx):
+        return self._eval_step(
+            batch,
+            prefix="eval",
+            monitor_classes=self.monitor_classes,
+            compute_metrics_for_every_class=False,
         )
-
-        pred_ids = []
-        target_ids = []
-
-        for i, prediction in enumerate(prediction_batch):
-            prediction = [
-                p for p in prediction.cpu().numpy() if p not in self.schema_tokenizer.special_ids
-            ]
-            pred_ids.append(prediction)
-
-            target = [
-                p
-                for p in batch["decoder_input_ids"][i].cpu().numpy()
-                if p not in self.schema_tokenizer.special_ids
-            ]
-            target_ids.append(target)
-
-        exact_match = sum(int(str(p) == str(l)) for p, l in zip(pred_ids, target_ids))
-        exact_match /= len(target_ids)
-
-        pred_tokens = [self.schema_tokenizer.decode(p, return_tokens=True) for p in pred_ids]
-        true_tokens = [self.schema_tokenizer.decode(t, return_tokens=True) for t in target_ids]
-
-        tree_metrics = get_tree_path_metrics(
-            pred_tokens, true_tokens, self.monitor_classes, prefix
-        )
-
-        log_dict = {
-            f"{prefix}_exact_match": exact_match,
-            **tree_metrics,
-        }
-
-        log_dict = {k: self._maybe_torchify(v) for k, v in log_dict.items()}
-        return log_dict
 
     def validation_epoch_end(self, outputs):
         avg_log = self._average_logs(outputs)
         return {"log": avg_log}
 
-    def val_dataloader(self):
+    def val_dataloader(self, subset_size=1.0):
+        valid_dataset = self.valid_dataset
+        if subset_size < 1:
+            valid_dataset = make_subset(valid_dataset, subset_size)
+
         loader = DataLoader(
-            self.valid_dataset,
+            valid_dataset,
             batch_size=self.batch_size,
             num_workers=8,
             pin_memory=True,
@@ -257,7 +224,12 @@ class PointerModule(LightningModule):
         return loader
 
     def test_step(self, batch, batch_idx):
-        return self.validation_step(batch, batch_idx, prefix="test")
+        return self._eval_step(
+            batch,
+            prefix="test",
+            monitor_classes=self.schema_tokenizer.vocab,
+            compute_metrics_for_every_class=True,
+        )
 
     def test_epoch_end(self, outputs):
         avg_log = self._average_logs(outputs)
@@ -314,3 +286,55 @@ class PointerModule(LightningModule):
         act = self.freezing_schedule.unfreeze_head
         if act is not None and step == act:
             self.model.freeze_head(freeze=False)
+
+    def _eval_step(self, batch, prefix, monitor_classes, compute_metrics_for_every_class=False):
+        prediction_batch: torch.LongTensor = self.model.generate(
+            input_ids=batch["input_ids"].to(self.device),
+            pointer_mask=batch["pointer_mask"].to(self.device),
+            attention_mask=batch["attention_mask"].to(self.device),
+            max_length=68,
+            num_beams=1,
+            pad_token_id=self.text_tokenizer.pad_token_id,
+            bos_token_id=self.schema_tokenizer.bos_token_id,
+            eos_token_id=self.schema_tokenizer.eos_token_id,
+        )
+
+        pred_ids = []
+        target_ids = []
+
+        for i, prediction in enumerate(prediction_batch):
+            prediction = [
+                p for p in prediction.cpu().numpy() if p not in self.schema_tokenizer.special_ids
+            ]
+            pred_ids.append(prediction)
+
+            target = [
+                p
+                for p in batch["decoder_input_ids"][i].cpu().numpy()
+                if p not in self.schema_tokenizer.special_ids
+            ]
+            target_ids.append(target)
+
+        exact_match = sum(int(str(p) == str(l)) for p, l in zip(pred_ids, target_ids))
+        exact_match /= len(target_ids)
+
+        pred_tokens = [self.schema_tokenizer.decode(p, return_tokens=True) for p in pred_ids]
+        true_tokens = [self.schema_tokenizer.decode(t, return_tokens=True) for t in target_ids]
+
+        tree_metrics = get_tree_path_metrics(
+            pred_tokens, true_tokens, monitor_classes, prefix, compute_metrics_for_every_class
+        )
+
+        pred_strs = [self.schema_tokenizer.detokenize(p) for p in pred_tokens]
+        true_strs = [self.schema_tokenizer.detokenize(p) for p in true_tokens]
+
+        exact_match_str = sum(int(p == t) for p, t in zip(pred_strs, true_strs)) / len(true_strs)
+
+        log_dict = {
+            f"{prefix}_exact_match": exact_match,
+            f"{prefix}_exact_match_str": exact_match_str,
+            **tree_metrics,
+        }
+
+        log_dict = {k: self._maybe_torchify(v) for k, v in log_dict.items()}
+        return log_dict

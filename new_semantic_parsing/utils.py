@@ -55,50 +55,6 @@ def get_src_pointer_mask(input_ids, tokenizer: transformers.PreTrainedTokenizer)
     return mask
 
 
-def get_lr(model: transformers.PreTrainedModel):
-    """Get optimal learning rate according to the Scaling Laws.
-
-    https://arxiv.org/abs/2001.08361
-    lr ~= 0.003239 - 0.0001395 log(n_non_embedding_params)
-    """
-
-    if hasattr(model, "embeddings"):
-        n_embedding_params = get_n_embed_params_trainable(model.embeddings)
-    elif hasattr(model, "encoder") and hasattr(model, "decoder"):
-        n_embed_encoder = get_n_embed_params_trainable(model.encoder.embeddings)
-        n_embed_decoder = get_n_embed_params_trainable(model.decoder.embeddings)
-        n_embedding_params = n_embed_encoder + n_embed_decoder
-    else:
-        raise ValueError(
-            "Model object should have .embeddings or.encoder.embeddings and .decoder.embeddings"
-        )
-
-    n_non_embedding_params = model.num_parameters(only_trainable=True) - n_embedding_params
-    return 0.003239 - 0.0001395 * np.log(n_non_embedding_params)
-
-
-def get_n_embed_params_trainable(embeddings):
-    """
-    :param embeddings: BertEmbeddings
-    :returns: number of trainable embedding parameters
-    """
-    n_params = 0
-
-    tok = embeddings.word_embeddings
-    if tok.training:
-        n_params += tok.num_embeddings * tok.embedding_dim
-
-    pos = embeddings.position_embeddings
-    if pos.training:
-        n_params += pos.num_embeddings * pos.embedding_dim
-
-    typ = embeddings.token_type_embeddings
-    if typ.training:
-        n_params += typ.num_embeddings * typ.embedding_dim
-
-    return n_params
-
-
 def get_model_type(model_name):
     """Search for a largest substring from transformers.CONFIG_MAPPING"""
     candidate = ""

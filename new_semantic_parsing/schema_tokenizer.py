@@ -75,7 +75,7 @@ class TopSchemaTokenizer:
         self.bos_token = "[BOS]"
         self.eos_token = "[EOS]"
 
-        self._vocab = schema_vocab
+        self.vocab = schema_vocab
         self._itos = [self.pad_token, self.bos_token, self.eos_token] + sorted(schema_vocab)
         self._stoi = {s: i for i, s in enumerate(self._itos)}
 
@@ -221,7 +221,7 @@ class TopSchemaTokenizer:
         os.makedirs(path, exist_ok=True)
 
         with open(path_join(path, "schema_vocab.txt"), "w") as f:
-            f.write("\n".join(self._vocab))
+            f.write("\n".join(self.vocab))
 
         self.src_tokenizer.save_pretrained(path)
 
