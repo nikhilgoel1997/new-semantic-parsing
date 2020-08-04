@@ -14,7 +14,6 @@
 # =============================================================================
 """Data structures for more clear interfaces across the codebase."""
 
-from enum import Enum
 from typing import NewType, List, Union
 from dataclasses import dataclass
 

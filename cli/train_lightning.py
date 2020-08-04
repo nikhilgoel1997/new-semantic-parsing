@@ -12,11 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # =============================================================================
-"""Train the model using preprocessed (binary) data and save the model and tokenizer into a directory.
-
-Uses Lightning, largely copies train.py.
-The code is not shared for easier modification while supporting backcompatibility with train.py.
-"""
+"""Train the model using preprocessed (binary) data and save the model and tokenizer into a directory."""
 
 import os
 import sys
@@ -63,91 +59,91 @@ def parse_args(args=None):
     # fmt: off
 
     # data
-    parser.add_argument('--data-dir', required=True,
-                        help='Path to preprocess.py --save-dir containing tokenizer, '
-                             'data.pkl, and args.toml')
-    parser.add_argument('--output-dir', default=None,
-                        help='directory to store checkpoints and other output files')
-    parser.add_argument('--eval-data-amount', default=0.5, type=float,
-                        help='amount of validation set to use when training. '
-                             'The final evaluation will use the full dataset.')
-    parser.add_argument('--new-classes-file', default=None,
-                        help='path to a text file with names of classes to track, one class per line')
+    parser.add_argument("--data-dir", required=True,
+                        help="Path to preprocess.py --save-dir containing tokenizer, "
+                             "data.pkl, and args.toml")
+    parser.add_argument("--output-dir", default=None,
+                        help="directory to store checkpoints and other output files")
+    parser.add_argument("--eval-data-amount", default=0.5, type=float,
+                        help="amount of validation set to use when training. "
+                             "The final evaluation will use the full dataset.")
+    parser.add_argument("--new-classes-file", default=None,
+                        help="path to a text file with names of classes to track, one class per line")
 
     # model
-    parser.add_argument('--encoder-model', default=None,
-                        help='pretrained model name, e.g. bert-base-uncased')
-    parser.add_argument('--layers', default=None, type=int,
-                        help='number of layers in the encoder. '
-                             'Only used if --encoder-model is not provided.')
-    parser.add_argument('--hidden', default=None, type=int,
-                        help='hidden size of the encoder. '
-                             'Only used if --encoder-model is not provided.')
-    parser.add_argument('--heads', default=None, type=int,
-                        help='hidden size of the encoder. '
-                             'Only used if --encoder-model is not provided.')
-    parser.add_argument('--decoder-layers', default=None, type=int,
-                        help='number of layers in the decoder. '
-                             'Equal to the number of the encoder layers by default')
-    parser.add_argument('--decoder-hidden', default=None, type=int,
-                        help='hidden size of the decoder. '
-                             'Equal to the hidden side of the encoder by default')
-    parser.add_argument('--decoder-heads', default=None, type=int,
-                        help='hidden size of the decoder. '
-                             'Equal to the number of the encoder heads by default')
+    parser.add_argument("--encoder-model", default=None,
+                        help="pretrained model name, e.g. bert-base-uncased")
+    parser.add_argument("--layers", default=None, type=int,
+                        help="number of layers in the encoder. "
+                             "Only used if --encoder-model is not provided.")
+    parser.add_argument("--hidden", default=None, type=int,
+                        help="hidden size of the encoder. "
+                             "Only used if --encoder-model is not provided.")
+    parser.add_argument("--heads", default=None, type=int,
+                        help="hidden size of the encoder. "
+                             "Only used if --encoder-model is not provided.")
+    parser.add_argument("--decoder-layers", default=None, type=int,
+                        help="number of layers in the decoder. "
+                             "Equal to the number of the encoder layers by default")
+    parser.add_argument("--decoder-hidden", default=None, type=int,
+                        help="hidden size of the decoder. "
+                             "Equal to the hidden side of the encoder by default")
+    parser.add_argument("--decoder-heads", default=None, type=int,
+                        help="hidden size of the decoder. "
+                             "Equal to the number of the encoder heads by default")
 
     # model architecture changes
-    parser.add_argument('--use-pointer-bias', default=False, action='store_true',
-                        help='Use bias in pointer network')
+    parser.add_argument("--use-pointer-bias", default=False, action="store_true",
+                        help="Use bias in pointer network")
 
     # training
-    parser.add_argument('--epochs', default=1, type=int)
-    parser.add_argument('--min-epochs', default=1, type=int)
-    parser.add_argument('--max-steps', default=None, type=int)
-    parser.add_argument('--min-steps', default=None, type=int)
-    parser.add_argument('--early-stopping', default=None, type=int,
-                        help='Lightning-only. Early stopping patience. No early stopping by default.')
+    parser.add_argument("--epochs", default=1, type=int)
+    parser.add_argument("--min-epochs", default=1, type=int)
+    parser.add_argument("--max-steps", default=None, type=int)
+    parser.add_argument("--min-steps", default=None, type=int)
+    parser.add_argument("--early-stopping", default=None, type=int,
+                        help="Lightning-only. Early stopping patience. No early stopping by default.")
 
-    parser.add_argument('--seed', default=1, type=int)
-    parser.add_argument('--lr', default=None, type=float,
-                        help='By default, lr is chosen according to the Scaling Laws for Neural Language Models')
-    parser.add_argument('--encoder-lr', default=None, type=float,
-                        help='Encoder learning rate, overrides --lr')
-    parser.add_argument('--decoder-lr', default=None, type=float,
-                        help='Decoder learning rate, overrides --lr')
+    parser.add_argument("--seed", default=1, type=int)
+    parser.add_argument("--lr", default=None, type=float,
+                        help="By default, lr is chosen according to the Scaling Laws for Neural Language Models")
+    parser.add_argument("--encoder-lr", default=None, type=float,
+                        help="Encoder learning rate, overrides --lr")
+    parser.add_argument("--decoder-lr", default=None, type=float,
+                        help="Decoder learning rate, overrides --lr")
 
-    parser.add_argument('--weight-decay', default=0, type=float)
-    parser.add_argument('--dropout', default=0.1, type=float,
-                        help='dropout amount for the encoder, decoder and head, default value 0.1 is from Transformers')
-    parser.add_argument('--warmup-steps', default=1, type=int)
-    parser.add_argument('--gradient-accumulation-steps', default=1, type=int)
-    parser.add_argument('--batch-size', default=64, type=int)
-    parser.add_argument('--max-grad-norm', default=1.0, type=float)
-    parser.add_argument('--label-smoothing', default=0.1, type=float)
+    parser.add_argument("--weight-decay", default=0, type=float)
+    parser.add_argument("--dropout", default=0.1, type=float,
+                        help="dropout amount for the encoder, decoder and head, default value 0.1 is from Transformers")
+    parser.add_argument("--warmup-steps", default=1, type=int)
+    parser.add_argument("--gradient-accumulation-steps", default=1, type=int)
+    parser.add_argument("--batch-size", default=64, type=int)
+    parser.add_argument("--max-grad-norm", default=1.0, type=float)
+    parser.add_argument("--label-smoothing", default=0.1, type=float)
 
     # --- freezing
-    parser.add_argument('--freeze-encoder', default=None, type=int,
-                        help='step to freeze encoder')
-    parser.add_argument('--unfreeze-encoder', default=None, type=int,
-                        help='step to unfreeze encoder')
-    parser.add_argument('--freeze-decoder', default=None, type=int,
-                        help='step to freeze decoder')
-    parser.add_argument('--unfreeze-decoder', default=None, type=int,
-                        help='step to unfreeze decoder')
-    parser.add_argument('--freeze-head', default=None, type=int,
-                        help='step to freeze head')
-    parser.add_argument('--unfreeze-head', default=None, type=int,
-                        help='step to unfreeze head')
+    parser.add_argument("--freeze-encoder", default=None, type=int,
+                        help="step to freeze encoder")
+    parser.add_argument("--unfreeze-encoder", default=None, type=int,
+                        help="step to unfreeze encoder")
+    parser.add_argument("--freeze-decoder", default=None, type=int,
+                        help="step to freeze decoder")
+    parser.add_argument("--unfreeze-decoder", default=None, type=int,
+                        help="step to unfreeze decoder")
+    parser.add_argument("--freeze-head", default=None, type=int,
+                        help="step to freeze head")
+    parser.add_argument("--unfreeze-head", default=None, type=int,
+                        help="step to unfreeze head")
 
     # misc
-    parser.add_argument('--wandb-project', default=None)
-    parser.add_argument('--log-every', default=100, type=int)
-    parser.add_argument('--tags', default=None)
-    parser.add_argument('--fp16', default=False, action='store_true')
-    parser.add_argument('--gpus', default=None, type=int,
-                        help='Lightning-only. Number of gpus to train the model on')
-    parser.add_argument('--split-amount-finetune', default=None, type=float,
-                        help='Only used for logging, amount of data that was removed from the training set')
+    parser.add_argument("--wandb-project", default=None)
+    parser.add_argument("--log-every", default=100, type=int)
+    parser.add_argument("--tags", default=None)
+    parser.add_argument("--fp16", default=False, action="store_true")
+    parser.add_argument("--gpus", default=None, type=int,
+                        help="Lightning-only. Number of gpus to train the model on")
+    parser.add_argument("--split-amount-finetune", default=None, type=float,
+                        help="Only used for logging, amount of data that was removed from the training set")
 
     # fmt: on
 

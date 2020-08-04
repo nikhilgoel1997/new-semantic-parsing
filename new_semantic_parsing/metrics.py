@@ -17,8 +17,8 @@
 from collections import Counter
 from functools import reduce
 from operator import add
-from typing import List
 from pprint import pformat
+from typing import List
 
 import torch
 

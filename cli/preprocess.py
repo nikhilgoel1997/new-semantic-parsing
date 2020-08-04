@@ -50,20 +50,20 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 def parse_args(args=None):
     parser = argparse.ArgumentParser()
     # fmt: off
-    parser.add_argument('--data', required=True,
-                        help='path to TOP dataset directory')
-    parser.add_argument('--text-tokenizer', required=True,
-                        help='pratrained tokenizer name or path to a saved tokenizer')
-    parser.add_argument('--output-dir', required=True,
-                        help='directory to save preprocessed data')
-    parser.add_argument('--seed', default=34)
+    parser.add_argument("--data", required=True,
+                        help="path to TOP dataset directory")
+    parser.add_argument("--text-tokenizer", required=True,
+                        help="pratrained tokenizer name or path to a saved tokenizer")
+    parser.add_argument("--output-dir", required=True,
+                        help="directory to save preprocessed data")
+    parser.add_argument("--seed", default=34)
 
     # splitting parameters
-    parser.add_argument('--split-class', default=None,
-                        help='remove --split-ratio of the class from the training dataset and make a finetune_data; '
-                             'do not perform split by default')
-    parser.add_argument('--split-amount', default=None, type=float,
-                        help='0 < --split-amount < 1, amount of data to remove from the training dataset')
+    parser.add_argument("--split-class", default=None,
+                        help="remove --split-ratio of the class from the training dataset and make a finetune_data; "
+                             "do not perform split by default")
+    parser.add_argument("--split-amount", default=None, type=float,
+                        help="0 < --split-amount < 1, amount of data to remove from the training dataset")
     # fmt: on
 
     args = parser.parse_args(args)

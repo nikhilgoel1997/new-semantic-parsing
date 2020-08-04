@@ -69,84 +69,84 @@ def parse_args(args=None):
     # fmt: off
 
     # data
-    parser.add_argument('--data-dir', required=True,
-                        help='Path to preprocess.py --save-dir containing tokenizer, '
-                             'data.pkl, and args.toml')
-    parser.add_argument('--output-dir', default=None,
-                        help='directory to store checkpoints and other output files')
-    parser.add_argument('--eval-data-amount', default=1., type=float,
-                        help='amount of validation set to use when training. '
-                             'The final evaluation will use the full dataset.')
-    parser.add_argument('--new-classes-file', default=None,
-                        help='path to a text file with names of classes to track, one class per line')
+    parser.add_argument("--data-dir", required=True,
+                        help="Path to preprocess.py --save-dir containing tokenizer, "
+                             "data.pkl, and args.toml")
+    parser.add_argument("--output-dir", default=None,
+                        help="directory to store checkpoints and other output files")
+    parser.add_argument("--eval-data-amount", default=1., type=float,
+                        help="amount of validation set to use when training. "
+                             "The final evaluation will use the full dataset.")
+    parser.add_argument("--new-classes-file", default=None,
+                        help="path to a text file with names of classes to track, one class per line")
 
-    parser.add_argument('--new-data-amount', default=1., type=float,
-                        help='amount of new data (finetune_set) to train on, 0 < amount <= 1')
-    parser.add_argument('--old-data-amount', default=0., type=float,
-                        help='amount of old data (train_set) to train on, only values from {0, 1} are supported')
-    parser.add_argument('--old-data-sampling-method', default='merge_subset',
-                        help='how to sample from old data')
+    parser.add_argument("--new-data-amount", default=1., type=float,
+                        help="amount of new data (finetune_set) to train on, 0 < amount <= 1")
+    parser.add_argument("--old-data-amount", default=0., type=float,
+                        help="amount of old data (train_set) to train on, only values from {0, 1} are supported")
+    parser.add_argument("--old-data-sampling-method", default="merge_subset",
+                        help="how to sample from old data")
 
     # model
-    parser.add_argument('--model-dir', required=True,
-                        help='model directory containing 1) checkpoint loadable via '
-                             'EncoderDecoderWPointerModel.from_pretrained and '
-                             '2) tokenizer directory')
+    parser.add_argument("--model-dir", required=True,
+                        help="model directory containing 1) checkpoint loadable via "
+                             "EncoderDecoderWPointerModel.from_pretrained and "
+                             "2) tokenizer directory")
 
     # training
-    parser.add_argument('--epochs', default=1, type=int)
-    parser.add_argument('--min-epochs', default=1, type=int)
-    parser.add_argument('--max-steps', default=None, type=int)
-    parser.add_argument('--min-steps', default=None, type=int)
-    parser.add_argument('--early-stopping', default=None, type=int,
-                        help='Early stopping patience. No early stopping by default.')
+    parser.add_argument("--epochs", default=1, type=int)
+    parser.add_argument("--min-epochs", default=1, type=int)
+    parser.add_argument("--max-steps", default=None, type=int)
+    parser.add_argument("--min-steps", default=None, type=int)
+    parser.add_argument("--early-stopping", default=None, type=int,
+                        help="Early stopping patience. No early stopping by default.")
 
-    parser.add_argument('--seed', default=1, type=int)
-    parser.add_argument('--lr', default=None, type=float,
-                        help='By default, checkpoint lr is used.')
-    parser.add_argument('--encoder-lr', default=None, type=float,
-                        help='Encoder learning rate, overrides --lr')
-    parser.add_argument('--decoder-lr', default=None, type=float,
-                        help='Decoder learning rate, overrides --lr')
+    parser.add_argument("--seed", default=1, type=int)
+    parser.add_argument("--lr", default=None, type=float,
+                        help="By default, checkpoint lr is used.")
+    parser.add_argument("--encoder-lr", default=None, type=float,
+                        help="Encoder learning rate, overrides --lr")
+    parser.add_argument("--decoder-lr", default=None, type=float,
+                        help="Decoder learning rate, overrides --lr")
 
-    parser.add_argument('--weight-decay', default=None, type=float)
-    parser.add_argument('--move-norm', default=None, type=float,
-                        help='regularization coefficient for the distance between the initial and current network')
-    parser.add_argument('--move-norm-p', default=2, type=int,
-                        help='p of the L-p norm used in move-norm regularization')
-    parser.add_argument('--dropout', default=None, type=float,
-                        help='dropout amount for the encoder and decoder, by defalut checkpoint value is used')
-    parser.add_argument('--warmup-steps', default=None, type=int)
-    parser.add_argument('--gradient-accumulation-steps', default=1, type=int)
-    parser.add_argument('--batch-size', default=None, type=int)
-    parser.add_argument('--max-grad-norm', default=1.0, type=float)
-    parser.add_argument('--label-smoothing', default=None, type=float)
-    parser.add_argument('--no-opt-state', default=False, action='store_true')
+    parser.add_argument("--weight-decay", default=None, type=float)
+    parser.add_argument("--move-norm", default=None, type=float,
+                        help="regularization coefficient for the distance between the initial and current network")
+    parser.add_argument("--move-norm-p", default=2, type=int,
+                        help="p of the L-p norm used in move-norm regularization")
+    parser.add_argument("--dropout", default=None, type=float,
+                        help="dropout amount for the encoder and decoder, by defalut checkpoint value is used")
+    parser.add_argument("--warmup-steps", default=None, type=int)
+    parser.add_argument("--gradient-accumulation-steps", default=1, type=int)
+    parser.add_argument("--batch-size", default=None, type=int)
+    parser.add_argument("--max-grad-norm", default=1.0, type=float)
+    parser.add_argument("--label-smoothing", default=None, type=float)
+    parser.add_argument("--no-opt-state", default=False, action="store_true")
 
     # --- freezing
-    parser.add_argument('--freeze-encoder', default=None, type=int,
-                        help='step to freeze encoder')
-    parser.add_argument('--unfreeze-encoder', default=None, type=int,
-                        help='step to unfreeze encoder')
-    parser.add_argument('--freeze-decoder', default=None, type=int,
-                        help='step to freeze decoder')
-    parser.add_argument('--unfreeze-decoder', default=None, type=int,
-                        help='step to unfreeze decoder')
-    parser.add_argument('--freeze-head', default=None, type=int,
-                        help='step to freeze head')
-    parser.add_argument('--unfreeze-head', default=None, type=int,
-                        help='step to unfreeze head')
+    parser.add_argument("--freeze-encoder", default=None, type=int,
+                        help="step to freeze encoder")
+    parser.add_argument("--unfreeze-encoder", default=None, type=int,
+                        help="step to unfreeze encoder")
+    parser.add_argument("--freeze-decoder", default=None, type=int,
+                        help="step to freeze decoder")
+    parser.add_argument("--unfreeze-decoder", default=None, type=int,
+                        help="step to unfreeze decoder")
+    parser.add_argument("--freeze-head", default=None, type=int,
+                        help="step to freeze head")
+    parser.add_argument("--unfreeze-head", default=None, type=int,
+                        help="step to unfreeze head")
 
     # misc
-    parser.add_argument('--wandb-project', default=None)
-    parser.add_argument('--log-every', default=None, type=int)
-    parser.add_argument('--tags', default=None)
-    parser.add_argument('--fp16', default=False, action='store_true')
-    parser.add_argument('--gpus', default=None, type=int,
-                        help='Number of gpus to train the model on')
-    parser.add_argument('--clean-output', default=False, action='store_true')
-    parser.add_argument('--split-amount-finetune', default=None, type=float,
-                        help='Only used for logging, amount of data that was removed from the training set')
+    parser.add_argument("--wandb-project", default=None)
+    parser.add_argument("--log-every", default=None, type=int)
+    parser.add_argument("--tags", default=None)
+    parser.add_argument("--fp16", default=False, action="store_true")
+    parser.add_argument("--gpus", default=None, type=int,
+                        help="Number of gpus to train the model on")
+    parser.add_argument("--clean-output", default=False, action="store_true")
+    parser.add_argument("--split-amount-finetune", default=None, type=float,
+                        help="Only used for logging, amount of data that was removed from the training set")
 
     # fmt: on
 

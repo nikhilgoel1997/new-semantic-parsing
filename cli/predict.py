@@ -54,24 +54,24 @@ def parse_args(args=None):
     parser = argparse.ArgumentParser()
 
     # fmt: off
-    parser.add_argument('--data', required=True, help='path to data file')
-    parser.add_argument('--model', required=True, help='path to a model checkpoint')
-    parser.add_argument('--output-file', required=True,
-                        help='file to save preprocessed data')
-    parser.add_argument('--schema-tokenizer', default=None,
-                        help='path to a saved tokenizer (note that schema tokenizer includes text tokenizer), '
-                             'by default --data/tokenizer is used')
-    parser.add_argument('--batch-size', default=32, type=int)
-    parser.add_argument('--num-beams', default=4, type=int)
-    parser.add_argument('--src-max-len', default=63, type=int,
-                        help='maximum length of the source sequence in tokens, '
-                             '63 for TOP train set and bert-base-cased tokenizer')
-    parser.add_argument('--tgt-max-len', default=98, type=int,
-                        help='maximum length of the target sequence in tokens, '
-                             '98 for TOP train set and bert-base-cased tokenizer')
-    parser.add_argument('--device', default=None,
-                        help='Use CUDA if available by default')
-    parser.add_argument('--seed', default=34, type=int)
+    parser.add_argument("--data", required=True, help="path to data file")
+    parser.add_argument("--model", required=True, help="path to a model checkpoint")
+    parser.add_argument("--output-file", required=True,
+                        help="file to save preprocessed data")
+    parser.add_argument("--schema-tokenizer", default=None,
+                        help="path to a saved tokenizer (note that schema tokenizer includes text tokenizer), "
+                             "by default --data/tokenizer is used")
+    parser.add_argument("--batch-size", default=32, type=int)
+    parser.add_argument("--num-beams", default=4, type=int)
+    parser.add_argument("--src-max-len", default=63, type=int,
+                        help="maximum length of the source sequence in tokens, "
+                             "63 for TOP train set and bert-base-cased tokenizer")
+    parser.add_argument("--tgt-max-len", default=98, type=int,
+                        help="maximum length of the target sequence in tokens, "
+                             "98 for TOP train set and bert-base-cased tokenizer")
+    parser.add_argument("--device", default=None,
+                        help="Use CUDA if available by default")
+    parser.add_argument("--seed", default=34, type=int)
     # fmt: on
 
     args = parser.parse_args(args)

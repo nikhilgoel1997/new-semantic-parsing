@@ -22,12 +22,11 @@ from torch.utils.data import DataLoader
 from pytorch_lightning import LightningModule
 
 import new_semantic_parsing.optimization as opt
-from new_semantic_parsing import metrics
-from new_semantic_parsing.utils import make_subset
-from new_semantic_parsing.data import PointerDataset, Seq2SeqDataCollator, SampleConcatSubset
+from new_semantic_parsing import metrics, data
 from new_semantic_parsing.dataclasses import EncDecFreezingSchedule
-from new_semantic_parsing.schema_tokenizer import TopSchemaTokenizer
 from new_semantic_parsing.modeling_encoder_decoder_wpointer import EncoderDecoderWPointerModel
+from new_semantic_parsing.schema_tokenizer import TopSchemaTokenizer
+from new_semantic_parsing.utils import make_subset
 
 
 class PointerModule(LightningModule):
@@ -54,8 +53,8 @@ class PointerModule(LightningModule):
         self,
         model: EncoderDecoderWPointerModel,
         schema_tokenizer: TopSchemaTokenizer,
-        train_dataset: PointerDataset,
-        valid_dataset: PointerDataset,
+        train_dataset: data.PointerDataset,
+        valid_dataset: data.PointerDataset,
         lr: Union[float, Dict],
         batch_size=32,
         warmup_steps=0,
@@ -87,7 +86,7 @@ class PointerModule(LightningModule):
         self.monitor_classes = monitor_classes
         self.freezing_schedule = freezing_schedule
 
-        self._collator = Seq2SeqDataCollator(
+        self._collator = data.Seq2SeqDataCollator(
             pad_id=self.text_tokenizer.pad_token_id,
             decoder_pad_id=self.schema_tokenizer.pad_token_id,
         )
@@ -141,7 +140,7 @@ class PointerModule(LightningModule):
         return {"loss": loss, "aggregate_log": log_dict}
 
     def training_epoch_end(self, outputs):
-        if isinstance(self.train_dataset, SampleConcatSubset):
+        if isinstance(self.train_dataset, data.SampleConcatSubset):
             self.train_dataset.resample()
 
         # extract log_dict from outputs and ignore the outputs from no-log iterations

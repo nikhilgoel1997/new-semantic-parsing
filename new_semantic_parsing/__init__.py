@@ -16,6 +16,6 @@
 SAVE_FORMAT_VERSION = "0.5-nightly-Jul27"
 
 from .configuration_encoder_decoder_wpointer import EncoderDecoderWPointerConfig
+from .lightning_module import PointerModule
 from .modeling_encoder_decoder_wpointer import EncoderDecoderWPointerModel
 from .schema_tokenizer import TopSchemaTokenizer
-from .lightning_module import PointerModule

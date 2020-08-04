@@ -13,14 +13,14 @@
 # limitations under the License.
 # =============================================================================
 """Elements of data feeding pipeline - torch Dataset and collator"""
+
+import torch
 import numpy as np
 import pandas as pd
-import torch
-import torch.utils.data
 from tqdm.auto import tqdm
 
-from new_semantic_parsing.schema_tokenizer import TopSchemaTokenizer
 from new_semantic_parsing.dataclasses import InputDataClass, List, Tensor, PairItem
+from new_semantic_parsing.schema_tokenizer import TopSchemaTokenizer
 from new_semantic_parsing.utils import get_src_pointer_mask, make_subset
 
 
