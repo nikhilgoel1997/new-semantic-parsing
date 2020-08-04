@@ -74,7 +74,7 @@ def parse_args(args=None):
 
     if args.split_class is not None:
         if args.split_amount is None:
-            raise ValueError("--split-amount should be specified")
+            raise ValueError("--split-amount should be specified if --split-class is provided")
 
     return args
 
@@ -98,7 +98,7 @@ def main(args):
         # NOTE: this is not train/eval split, this is train/finetune split
         # finetune part is not used by train script, but used by retrain script
 
-        # get a small number of examples that contains all classes from schema_vocab
+        # Get a small set of examples that contains all classes from schema_vocab
         required_example_ids = utils.get_required_example_ids(schema_vocab, train_data)
 
         logger.info("Splitting the training dataset")
@@ -116,7 +116,6 @@ def main(args):
         leave = len(split_ids) - take
 
         assert take > 0
-        assert leave >= len(required_example_ids)
 
         logger.info(f"Taking {take} examples and leaving {leave} examples")
 
