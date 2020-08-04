@@ -21,6 +21,7 @@ and uses finetune_set instead of train_set from the data.pkl
 import os
 import sys
 import shutil
+import pprint
 import logging
 import argparse
 import tempfile
@@ -29,26 +30,10 @@ from os.path import join as path_join
 
 import toml
 import torch
+import pytorch_lightning as pl
 
-from pytorch_lightning import Trainer
-from pytorch_lightning import callbacks
-from pytorch_lightning.loggers import WandbLogger
-
-from new_semantic_parsing import (
-    EncoderDecoderWPointerModel,
-    TopSchemaTokenizer,
-)
-from new_semantic_parsing import (
-    utils,
-    cli_utils,
-    SAVE_FORMAT_VERSION,
-    EncoderDecoderWPointerConfig,
-)
-from new_semantic_parsing.data import PointerDataset, SampleConcatSubset
-from new_semantic_parsing.callbacks import TransformersModelCheckpoint
-from new_semantic_parsing.dataclasses import EncDecFreezingSchedule, SamplingMethods
-from new_semantic_parsing.optimization import get_optimizers, set_weight_decay
-from new_semantic_parsing.lightning_module import PointerModule
+import new_semantic_parsing as nsp
+from new_semantic_parsing import utils, cli_utils, optimization
 
 
 logging.basicConfig(
@@ -178,7 +163,7 @@ def parse_args(args=None):
     if not (0 <= args.old_data_amount <= 1):
         raise ValueError(f"--old-data-amount should be between 0 and 1 (inclusive)")
 
-    if not hasattr(SamplingMethods, args.old_data_sampling_method):
+    if not hasattr(nsp.dataclasses.SamplingMethods, args.old_data_sampling_method):
         raise ValueError(args.old_data_sampling_method)
 
     return args
@@ -186,7 +171,7 @@ def parse_args(args=None):
 
 def load_model(model_dir, dropout=None, move_norm=None, move_norm_p=None, label_smoothing=None):
     """Load a trained model and override some model properties if specified."""
-    model_config = EncoderDecoderWPointerConfig.from_pretrained(model_dir)
+    model_config = nsp.EncoderDecoderWPointerConfig.from_pretrained(model_dir)
     if dropout is not None:
         model_config.set_dropout(dropout)
     if move_norm is not None:
@@ -196,7 +181,7 @@ def load_model(model_dir, dropout=None, move_norm=None, move_norm_p=None, label_
     if label_smoothing is not None:
         model_config.label_smoothing = label_smoothing
 
-    model = EncoderDecoderWPointerModel.from_pretrained(model_dir, config=model_config)
+    model = nsp.EncoderDecoderWPointerModel.from_pretrained(model_dir, config=model_config)
     model.reset_move_norm()
     return model
 
@@ -218,7 +203,7 @@ def load_trainer(checkpoint_path, args, wandb_logger):
     # the checkpoints will be created in output_dir/..
     # NOTE: we need save_top_k=1 fot checkpoint_callback.last_checkpoint_path
     # to point to the best model
-    checkpoint_callback = TransformersModelCheckpoint(
+    checkpoint_callback = nsp.callbacks.TransformersModelCheckpoint(
         filepath=path_join(args.output_dir, "pl_checkpoint.ckpt"),
         save_top_k=1,
         verbose=False,
@@ -229,7 +214,7 @@ def load_trainer(checkpoint_path, args, wandb_logger):
 
     early_stopping = False
     if args.early_stopping is not None:
-        early_stopping = callbacks.EarlyStopping(
+        early_stopping = pl.callbacks.EarlyStopping(
             monitor="eval_exact_match",
             patience=args.early_stopping,
             strict=False,
@@ -237,18 +222,19 @@ def load_trainer(checkpoint_path, args, wandb_logger):
             mode="max",
         )
 
-    lr_logger = callbacks.LearningRateLogger()
+    lr_logger = pl.callbacks.LearningRateLogger()
 
     # overload some of the Trainer arguments if they are provided to the script
+    reload = args.old_data_sampling_method == nsp.dataclasses.SamplingMethods.sample
     trainer_kwargs = {
         "gradient_clip_val": args.max_grad_norm,
         "gpus": args.gpus,
         "accumulate_grad_batches": args.gradient_accumulation_steps,
-        "reload_dataloaders_every_epoch": args.old_data_sampling_method == SamplingMethods.sample,
+        "reload_dataloaders_every_epoch": reload,
     }
     trainer_kwargs = {k: v for k, v in trainer_kwargs.items() if v is not None}
 
-    trainer = Trainer(
+    trainer = pl.Trainer(
         resume_from_checkpoint=checkpoint_path,
         logger=wandb_logger,
         max_epochs=args.epochs,
@@ -287,7 +273,7 @@ def modify_checkpoint(
     checkpoint = torch.load(checkpoint_path)
 
     if no_opt_state:
-        optimizer = get_optimizers(
+        optimizer = optimization.get_optimizers(
             lightning_module.model,
             lightning_module.lr,
             lightning_module.weight_decay,
@@ -302,7 +288,9 @@ def modify_checkpoint(
 
     if weight_decay is not None:
         # PointerModule has a single optimizer
-        set_weight_decay(checkpoint["optimizer_states"][0]["param_groups"], weight_decay)
+        optimization.set_weight_decay(
+            checkpoint["optimizer_states"][0]["param_groups"], weight_decay
+        )
 
     os.makedirs(output_dir)
     initial_checkpoint_path = path_join(output_dir, "initial_checkpoint.pl")
@@ -311,12 +299,12 @@ def modify_checkpoint(
 
 
 def main(args):
-    logger.info(f"Starting finetuning with args: {args}")
-
     utils.set_seed(args.seed)
 
-    wandb_logger = WandbLogger(project=args.wandb_project, tags=args.tags)
+    wandb_logger = pl.loggers.WandbLogger(project=args.wandb_project, tags=args.tags)
     wandb_logger.log_hyperparams(args)
+
+    logger.info(f"Starting finetuning with args: \n{pprint.pformat(vars(args))}")
 
     if os.path.exists(args.output_dir):
         raise ValueError(f"output_dir {args.output_dir} already exists")
@@ -327,20 +315,20 @@ def main(args):
     tokenizer_path2 = path_join(args.data_dir, "tokenizer")
 
     if os.path.exists(path_join(tokenizer_path1, "schema_vocab.txt")):
-        schema_tokenizer = TopSchemaTokenizer.load(tokenizer_path1)
+        schema_tokenizer = nsp.TopSchemaTokenizer.load(tokenizer_path1)
     elif os.path.exists(tokenizer_path2):
-        schema_tokenizer = TopSchemaTokenizer.load(tokenizer_path2)
+        schema_tokenizer = nsp.TopSchemaTokenizer.load(tokenizer_path2)
     else:
         raise ValueError("Tokenizer is not found in both --model-dir and --data-dir")
 
     logger.info("Loading data")
 
     datasets = torch.load(path_join(args.data_dir, "data.pkl"))
-    train_dataset: PointerDataset = datasets["finetune_dataset"]
+    train_dataset: nsp.PointerDataset = datasets["finetune_dataset"]
     if train_dataset is None:
         raise RuntimeError("Datafile provided does not contain finetune_dataset")
 
-    eval_dataset: PointerDataset = datasets["valid_dataset"]
+    eval_dataset: nsp.PointerDataset = datasets["valid_dataset"]
 
     if args.fp16:
         train_dataset.fp16 = True
@@ -350,7 +338,7 @@ def main(args):
 
     with open(path_join(args.model_dir, "args.toml")) as f:
         train_args = toml.load(f)
-        if train_args["version"] != SAVE_FORMAT_VERSION:
+        if train_args["version"] != nsp.SAVE_FORMAT_VERSION:
             logger.warning(
                 "Binary data version differs from the current version. "
                 "May cause failing and unexpected behavior"
@@ -375,11 +363,11 @@ def main(args):
     wandb_logger.log_hyperparams({"num_new_data": len(train_subset)})
 
     if args.old_data_amount > 0:
-        if args.old_data_sampling_method == SamplingMethods.merge_subset:
+        if args.old_data_sampling_method == nsp.dataclasses.SamplingMethods.merge_subset:
             old_data_subset = utils.make_subset(datasets["train_dataset"], args.old_data_amount)
             train_subset = torch.utils.data.ConcatDataset([train_subset, old_data_subset])
-        elif args.old_data_sampling_method == SamplingMethods.sample:
-            train_subset = SampleConcatSubset(
+        elif args.old_data_sampling_method == nsp.dataclasses.SamplingMethods.sample:
+            train_subset = nsp.data.SampleConcatSubset(
                 train_subset, datasets["train_dataset"], args.old_data_amount
             )
         else:
@@ -411,9 +399,9 @@ def main(args):
     module_kwargs = {k: v for k, v in module_kwargs.items() if v is not None}
 
     # always overwrite freezing schedule because global_step starts from zero
-    module_kwargs["freezing_schedule"] = EncDecFreezingSchedule.from_args(args)
+    module_kwargs["freezing_schedule"] = nsp.dataclasses.EncDecFreezingSchedule.from_args(args)
 
-    lightning_module = PointerModule.load_from_checkpoint(
+    lightning_module = nsp.PointerModule.load_from_checkpoint(
         train_args["pl_checkpoint_path"],
         model=model,
         schema_tokenizer=schema_tokenizer,
@@ -459,7 +447,7 @@ def main(args):
     cli_utils.check_config(lightning_module, trainer, args, strict=True)
 
     with open(path_join(args.output_dir, "args.toml"), "w") as f:
-        args_dict = {"version": SAVE_FORMAT_VERSION, **vars(args)}
+        args_dict = {"version": nsp.SAVE_FORMAT_VERSION, **vars(args)}
         toml.dump(args_dict, f)
 
     logger.info("Training finished!")

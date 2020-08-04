@@ -28,12 +28,8 @@ import pandas as pd
 
 import transformers
 
-import new_semantic_parsing.data
-from new_semantic_parsing import (
-    utils,
-    TopSchemaTokenizer,
-    SAVE_FORMAT_VERSION,
-)
+import new_semantic_parsing as nsp
+from new_semantic_parsing import utils
 
 
 logging.basicConfig(
@@ -173,23 +169,19 @@ def main(args):
 
     logger.info("Building tokenizers")
     text_tokenizer = transformers.AutoTokenizer.from_pretrained(args.text_tokenizer, use_fast=True)
-    schema_tokenizer = TopSchemaTokenizer(schema_vocab, text_tokenizer)
+    schema_tokenizer = nsp.TopSchemaTokenizer(schema_vocab, text_tokenizer)
 
     logger.info("Tokenizing train dataset")
-    train_dataset = new_semantic_parsing.data.make_dataset(train_path, schema_tokenizer)
+    train_dataset = nsp.data.make_dataset(train_path, schema_tokenizer)
 
     logger.info("Tokenizing validation and test datasets")
-    valid_dataset = new_semantic_parsing.data.make_dataset(
-        path_join(args.data, "eval.tsv"), schema_tokenizer
-    )
-    test_dataset = new_semantic_parsing.data.make_dataset(
-        path_join(args.data, "test.tsv"), schema_tokenizer
-    )
+    valid_dataset = nsp.data.make_dataset(path_join(args.data, "eval.tsv"), schema_tokenizer)
+    test_dataset = nsp.data.make_dataset(path_join(args.data, "test.tsv"), schema_tokenizer)
 
     finetune_dataset = None
     if args.split_amount is not None:
         logger.info("Tokenizing finetune set")
-        finetune_dataset = new_semantic_parsing.data.make_dataset(finetune_path, schema_tokenizer)
+        finetune_dataset = nsp.data.make_dataset(finetune_path, schema_tokenizer)
 
         logger.info(f"Original train set size: {full_train_data_size}")
         logger.info(f"Reduced  train set size: {len(train_dataset)}")
@@ -203,7 +195,7 @@ def main(args):
     os.makedirs(args.output_dir, exist_ok=True)
 
     with open(path_join(args.output_dir, "args.toml"), "w") as f:
-        args_dict = {"version": SAVE_FORMAT_VERSION, **vars(args)}
+        args_dict = {"version": nsp.SAVE_FORMAT_VERSION, **vars(args)}
         toml.dump(args_dict, f)
 
     # text tokenizer is saved along with schema_tokenizer
@@ -218,7 +210,7 @@ def main(args):
         "valid_dataset": valid_dataset,
         "test_dataset": test_dataset,
         "finetune_dataset": finetune_dataset,
-        "version": SAVE_FORMAT_VERSION,
+        "version": nsp.SAVE_FORMAT_VERSION,
     }
 
     torch.save(data_state, path_join(args.output_dir, "data.pkl"))

@@ -14,31 +14,22 @@
 # =============================================================================
 """Train the model using preprocessed (binary) data and save the model and tokenizer into a directory."""
 
+import argparse
+import logging
+import pprint
 import os
 import sys
-import logging
 import tempfile
-import argparse
 from os.path import join as path_join
 
 import toml
 import torch
-import wandb
 import transformers
+import wandb
+import pytorch_lightning as pl
 
-from pytorch_lightning import Trainer
-from pytorch_lightning import callbacks
-from pytorch_lightning.loggers import WandbLogger
-
-from new_semantic_parsing import (
-    EncoderDecoderWPointerModel,
-    TopSchemaTokenizer,
-)
-from new_semantic_parsing import utils, cli_utils, SAVE_FORMAT_VERSION
-from new_semantic_parsing.data import PointerDataset
-from new_semantic_parsing.callbacks import TransformersModelCheckpoint
-from new_semantic_parsing.dataclasses import EncDecFreezingSchedule
-from new_semantic_parsing.lightning_module import PointerModule
+import new_semantic_parsing as nsp
+from new_semantic_parsing import utils, cli_utils
 
 
 logging.basicConfig(
@@ -189,7 +180,7 @@ def make_model(schema_tokenizer, max_src_len, args, preprocess_args=None):
     """
     if not args.encoder_model:
         # initialize the model from scratch
-        model = EncoderDecoderWPointerModel.from_parameters(
+        model = nsp.EncoderDecoderWPointerModel.from_parameters(
             layers=args.layers,
             hidden=args.hidden,
             heads=args.heads,
@@ -237,7 +228,7 @@ def make_model(schema_tokenizer, max_src_len, args, preprocess_args=None):
     )
     decoder = transformers.BertModel(decoder_config)
 
-    model = EncoderDecoderWPointerModel(
+    model = nsp.EncoderDecoderWPointerModel(
         encoder=encoder,
         decoder=decoder,
         max_src_len=max_src_len,
@@ -260,7 +251,7 @@ def make_trainer(args, wandb_logger):
     # the checkpoints will be created in output_dir/..
     # NOTE: we need save_top_k=1 fot checkpoint_callback.last_checkpoint_path
     # to point to the best model
-    checkpoint_callback = TransformersModelCheckpoint(
+    checkpoint_callback = nsp.callbacks.TransformersModelCheckpoint(
         filepath=path_join(args.output_dir, "pl_checkpoint.ckpt"),
         save_top_k=1,
         verbose=False,
@@ -271,7 +262,7 @@ def make_trainer(args, wandb_logger):
 
     early_stopping = False
     if args.early_stopping is not None:
-        early_stopping = callbacks.EarlyStopping(
+        early_stopping = pl.callbacks.EarlyStopping(
             monitor="eval_exact_match",
             patience=args.early_stopping,
             strict=False,
@@ -279,9 +270,9 @@ def make_trainer(args, wandb_logger):
             mode="max",
         )
 
-    lr_logger = callbacks.LearningRateLogger()
+    lr_logger = pl.callbacks.LearningRateLogger()
 
-    trainer = Trainer(
+    trainer = pl.Trainer(
         logger=wandb_logger,
         max_epochs=args.epochs,
         min_epochs=args.min_epochs,
@@ -301,23 +292,23 @@ def make_trainer(args, wandb_logger):
 
 
 def main(args):
-    logger.info(f"Starting training with args: {args}")
-
     utils.set_seed(args.seed)
 
-    wandb_logger = WandbLogger(project=args.wandb_project, tags=args.tags)
+    wandb_logger = pl.loggers.WandbLogger(project=args.wandb_project, tags=args.tags)
     wandb_logger.log_hyperparams(args)
+
+    logger.info(f"Starting training with args: \n{pprint.pformat(vars(args))}")
 
     if os.path.exists(args.output_dir):
         raise ValueError(f"output_dir {args.output_dir} already exists")
 
     logger.info("Loading tokenizers")
-    schema_tokenizer = TopSchemaTokenizer.load(path_join(args.data_dir, "tokenizer"))
+    schema_tokenizer = nsp.TopSchemaTokenizer.load(path_join(args.data_dir, "tokenizer"))
 
     logger.info("Loading data")
     datasets = torch.load(path_join(args.data_dir, "data.pkl"))
-    train_dataset: PointerDataset = datasets["train_dataset"]
-    eval_dataset: PointerDataset = datasets["valid_dataset"]
+    train_dataset: nsp.PointerDataset = datasets["train_dataset"]
+    eval_dataset: nsp.PointerDataset = datasets["valid_dataset"]
 
     if args.fp16:
         train_dataset.fp16 = True
@@ -328,7 +319,7 @@ def main(args):
     try:
         with open(path_join(args.data_dir, "args.toml")) as f:
             preprocess_args = toml.load(f)
-            if preprocess_args["version"] != SAVE_FORMAT_VERSION:
+            if preprocess_args["version"] != nsp.SAVE_FORMAT_VERSION:
                 logger.warning(
                     "Binary data version differs from the current version. "
                     "May cause failing and unexpected behavior"
@@ -351,11 +342,11 @@ def main(args):
 
     adam_eps = 1e-7 if args.fp16 else 1e-9
 
-    freezing_schedule = EncDecFreezingSchedule.from_args(args)
+    freezing_schedule = nsp.dataclasses.EncDecFreezingSchedule.from_args(args)
 
     wandb_logger.log_hyperparams({"num_data": len(train_dataset)})
 
-    lightning_module = PointerModule(
+    lightning_module = nsp.PointerModule(
         model=model,
         schema_tokenizer=schema_tokenizer,
         train_dataset=train_dataset,
@@ -394,7 +385,7 @@ def main(args):
 
     with open(path_join(args.output_dir, "args.toml"), "w") as f:
         args_dict = {
-            "version": SAVE_FORMAT_VERSION,
+            "version": nsp.SAVE_FORMAT_VERSION,
             "pl_checkpoint_path": trainer.checkpoint_callback.last_checkpoint_path,
             "metrics": final_metrics,
             **vars(args),
