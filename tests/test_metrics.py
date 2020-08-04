@@ -101,11 +101,9 @@ class TestMetrics(unittest.TestCase):
         pred1 = true
 
         expected1 = {
-            "predicted_paths": 3,
-             "expected_paths": 3,
-             "tree_path_precision": 1.0,
-             "tree_path_recall": 1.0,
-             "tree_path_f1": 1.0,
+            "tree_path_precision": 1.0,
+            "tree_path_recall": 1.0,
+            "tree_path_f1": 1.0,
         }
 
         pred2 = (
@@ -124,11 +122,9 @@ class TestMetrics(unittest.TestCase):
             "]")
 
         expected2 = {
-            "predicted_paths": 3,
-             "expected_paths": 3,
-             "tree_path_precision": 0.0,
-             "tree_path_recall": 0.0,
-             "tree_path_f1": 0.0,
+            "tree_path_precision": 0.0,
+            "tree_path_recall": 0.0,
+            "tree_path_f1": 0.0,
         }
 
         pred3 = (
@@ -148,8 +144,6 @@ class TestMetrics(unittest.TestCase):
             "]")
 
         expected3 = {
-            "predicted_paths": 4,
-            "expected_paths": 3,
             "tree_path_precision": 1/2.,
             "tree_path_recall": 2/3.,
             "tree_path_f1": 0.5714285714285715,
@@ -206,8 +200,6 @@ class TestMetrics(unittest.TestCase):
         classes1 = ["IN:GET_LOCATION_HOME"]
 
         expected1 = {
-            "predicted_paths": 1,
-            "expected_paths": 1,
             "tree_path_precision": 1.0,
             "tree_path_recall": 1.0,
             "tree_path_f1": 1.0,
