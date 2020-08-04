@@ -17,13 +17,10 @@
 
 Include fixing random seeds, metrics computation, learning rate selection, model loading, and prediction.
 """
-
 import random
 import torch
 import numpy as np
 import transformers
-
-from tqdm.auto import tqdm
 
 
 def set_seed(seed):
@@ -67,39 +64,6 @@ def get_model_type(model_name):
         raise ValueError(f"{model_name} is not found in transformers.CONFIG_MAPPING")
 
     return candidate
-
-
-def iterative_prediction(model, dataloader, schema_tokenizer, max_len, num_beams, device="cpu"):
-    model = model.to(device)
-
-    predictions_ids = []
-    predictions_str = []
-    text_tokenizer = schema_tokenizer.src_tokenizer
-
-    for batch in tqdm(dataloader, desc="generation"):
-        prediction_batch: torch.LongTensor = model.generate(
-            input_ids=batch["input_ids"].to(device),
-            pointer_mask=batch["pointer_mask"].to(device),
-            attention_mask=batch["attention_mask"].to(device),
-            max_length=max_len,
-            num_beams=num_beams,
-            pad_token_id=text_tokenizer.pad_token_id,
-            bos_token_id=schema_tokenizer.bos_token_id,
-            eos_token_id=schema_tokenizer.eos_token_id,
-        )
-
-        for i, prediction in enumerate(prediction_batch):
-            prediction = [
-                p for p in prediction.cpu().numpy() if p not in schema_tokenizer.special_ids
-            ]
-            predictions_ids.append(prediction)
-
-            prediction_str: str = schema_tokenizer.decode(
-                prediction, batch["input_ids"][i], skip_special_tokens=True,
-            )
-            predictions_str.append(prediction_str)
-
-    return predictions_ids, predictions_str
 
 
 def make_subset(dataset, subset_size):
@@ -155,27 +119,3 @@ def get_required_example_ids(schema_vocab, train_data):
         raise RuntimeError("Full vocabulary was not found in the training set")
 
     return required_example_ids
-
-
-def check_config(pointer_module, trainer, args, strict=False):
-    """Check that both module and trainer comply with args"""
-    _cfg = pointer_module.model.config
-    if args.dropout is not None:
-        assert _cfg.dropout == args.dropout
-        assert _cfg.encoder.hidden_dropout_prob == args.dropout
-        assert _cfg.decoder.hidden_dropout_prob == args.dropout
-        assert _cfg.encoder.attention_probs_dropout_prob == args.dropout
-        assert _cfg.decoder.attention_probs_dropout_prob == args.dropout
-
-    if getattr(args, "move_norm", None) is not None or strict:
-        assert _cfg.move_norm == args.move_norm
-        assert _cfg.move_norm_p == args.move_norm_p
-
-    if args.label_smoothing is not None:
-        assert _cfg.label_smoothing == args.label_smoothing
-
-    if args.weight_decay is not None and (trainer.optimizers is not None or strict):
-        for param_group in trainer.optimizers[0].param_groups:
-            if not param_group["use_weight_decay"]:
-                continue
-            assert param_group["weight_decay"] == args.weight_decay

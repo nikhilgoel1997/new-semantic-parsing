@@ -22,9 +22,9 @@ from torch.utils.data import DataLoader
 from pytorch_lightning import LightningModule
 
 import new_semantic_parsing.optimization as opt
+from new_semantic_parsing import metrics
 from new_semantic_parsing.utils import make_subset
 from new_semantic_parsing.data import PointerDataset, Seq2SeqDataCollator, SampleConcatSubset
-from new_semantic_parsing.metrics import compute_metrics_from_batch, get_tree_path_metrics
 from new_semantic_parsing.dataclasses import EncDecFreezingSchedule
 from new_semantic_parsing.schema_tokenizer import TopSchemaTokenizer
 from new_semantic_parsing.modeling_encoder_decoder_wpointer import EncoderDecoderWPointerModel
@@ -116,7 +116,9 @@ class PointerModule(LightningModule):
         label_masks = batch["decoder_attention_mask"]
 
         stop_token_ids = [self.schema_tokenizer.eos_token_id, self.schema_tokenizer.pad_token_id]
-        batch_metrics = compute_metrics_from_batch(preds, labels, label_masks, stop_token_ids)
+        batch_metrics = metrics.compute_metrics_from_batch(
+            preds, labels, label_masks, stop_token_ids
+        )
         batch_metrics = {f"train_batch_{k}": v for k, v in batch_metrics.items()}
 
         # tree path metrics
@@ -126,7 +128,7 @@ class PointerModule(LightningModule):
         pred_tokens = [self.schema_tokenizer.decode(p, return_tokens=True) for p in pred_ids]
         true_tokens = [self.schema_tokenizer.decode(t, return_tokens=True) for t in target_ids]
 
-        tree_metrics = get_tree_path_metrics(
+        tree_metrics = metrics.get_tree_path_metrics(
             pred_tokens, true_tokens, self.monitor_classes, "train_batch"
         )
 
@@ -205,6 +207,7 @@ class PointerModule(LightningModule):
             num_workers=8,
             pin_memory=True,
             collate_fn=self._collator.collate_batch,
+            shuffle=False,
         )
         return loader
 
@@ -315,26 +318,17 @@ class PointerModule(LightningModule):
             ]
             target_ids.append(target)
 
-        exact_match = sum(int(str(p) == str(l)) for p, l in zip(pred_ids, target_ids))
-        exact_match /= len(target_ids)
-
         pred_tokens = [self.schema_tokenizer.decode(p, return_tokens=True) for p in pred_ids]
         true_tokens = [self.schema_tokenizer.decode(t, return_tokens=True) for t in target_ids]
 
-        tree_metrics = get_tree_path_metrics(
-            pred_tokens, true_tokens, monitor_classes, prefix, compute_metrics_for_every_class
+        metrics_dict = metrics.get_metrics(
+            pred_tokens,
+            true_tokens,
+            monitor_classes,
+            prefix,
+            self.schema_tokenizer,
+            compute_metrics_for_every_class,
         )
 
-        pred_strs = [self.schema_tokenizer.detokenize(p) for p in pred_tokens]
-        true_strs = [self.schema_tokenizer.detokenize(p) for p in true_tokens]
-
-        exact_match_str = sum(int(p == t) for p, t in zip(pred_strs, true_strs)) / len(true_strs)
-
-        log_dict = {
-            f"{prefix}_exact_match": exact_match,
-            f"{prefix}_exact_match_str": exact_match_str,
-            **tree_metrics,
-        }
-
-        log_dict = {k: self._maybe_torchify(v) for k, v in log_dict.items()}
+        log_dict = {k: self._maybe_torchify(v) for k, v in metrics_dict.items()}
         return log_dict

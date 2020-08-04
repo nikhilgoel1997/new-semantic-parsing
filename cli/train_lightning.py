@@ -38,7 +38,7 @@ from new_semantic_parsing import (
     EncoderDecoderWPointerModel,
     TopSchemaTokenizer,
 )
-from new_semantic_parsing import utils, SAVE_FORMAT_VERSION
+from new_semantic_parsing import utils, cli_utils, SAVE_FORMAT_VERSION
 from new_semantic_parsing.data import PointerDataset
 from new_semantic_parsing.callbacks import TransformersModelCheckpoint
 from new_semantic_parsing.dataclasses import EncDecFreezingSchedule
@@ -51,7 +51,7 @@ logging.basicConfig(
     level=logging.INFO,
     stream=sys.stdout,
 )
-logger = logging.getLogger(__file__)
+logger = logging.getLogger(os.path.basename(__file__))
 logging.getLogger("transformers.configuration_utils").setLevel(logging.WARNING)
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -178,83 +178,21 @@ def parse_args(args=None):
     return args
 
 
-def main(args):
-    utils.set_seed(args.seed)
+def make_model(schema_tokenizer, max_src_len, args, preprocess_args=None):
+    """Initialize a model.
+    If args.encoder_model is specified, use it to load a pretrained encoder model.
 
-    wandb_logger = WandbLogger(project=args.wandb_project, tags=args.tags)
-    wandb_logger.log_hyperparams(args)
+    Args:
+        schema_tokenizer: TopSchemaTokenizer
+        max_src_len: int, maximum length of the source sequence in BPE tokens
+        args: argparse object from parse_args()
+        preprocess_args: (optional) dict, used to check the tokenizer used for preprocessing
 
-    if os.path.exists(args.output_dir):
-        raise ValueError(f"output_dir {args.output_dir} already exists")
-
-    logger.info("Loading tokenizers")
-    schema_tokenizer = TopSchemaTokenizer.load(path_join(args.data_dir, "tokenizer"))
-    text_tokenizer: transformers.PreTrainedTokenizer = schema_tokenizer.src_tokenizer
-
-    logger.info("Loading data")
-    datasets = torch.load(path_join(args.data_dir, "data.pkl"))
-    train_dataset: PointerDataset = datasets["train_dataset"]
-    eval_dataset: PointerDataset = datasets["valid_dataset"]
-
-    if args.fp16:
-        train_dataset.fp16 = True
-        eval_dataset.fp16 = True
-
-    max_src_len, _ = train_dataset.get_max_len()
-
-    try:
-        with open(path_join(args.data_dir, "args.toml")) as f:
-            preprocess_args = toml.load(f)
-            if preprocess_args["version"] != SAVE_FORMAT_VERSION:
-                logger.warning(
-                    "Binary data version differs from the current version. "
-                    "May cause failing and unexpected behavior"
-                )
-            wandb.config.update({"preprocess_" + k: v for k, v in preprocess_args.items()})
-
-    except FileNotFoundError:
-        preprocess_args = None
-
-    logger.info("Creating a model")
-    if args.encoder_model:
-        if preprocess_args is not None and preprocess_args["text_tokenizer"] != args.encoder_model:
-            logger.warning("Data may have been preprocessed with a different tokenizer")
-            logger.warning(f'Preprocessing tokenizer     : {preprocess_args["text_tokenizer"]}')
-            logger.warning(f"Pretrained encoder tokenizer: {args.encoder_model}")
-
-        encoder_config = transformers.AutoConfig.from_pretrained(args.encoder_model)
-        encoder_config.hidden_dropout_prob = args.dropout
-        encoder_config.attention_probs_dropout_prob = args.dropout
-
-        encoder = transformers.AutoModel.from_pretrained(args.encoder_model, config=encoder_config)
-
-        if encoder.config.vocab_size != text_tokenizer.vocab_size:
-            raise ValueError("Preprocessing tokenizer and model tokenizer are not compatible")
-
-        ffn_hidden = 4 * args.decoder_hidden if args.decoder_hidden is not None else None
-
-        decoder_config = transformers.BertConfig(
-            is_decoder=True,
-            vocab_size=schema_tokenizer.vocab_size + max_src_len,
-            hidden_size=args.decoder_hidden or encoder.config.hidden_size,
-            intermediate_size=ffn_hidden or encoder.config.intermediate_size,
-            num_hidden_layers=args.decoder_layers or encoder.config.num_hidden_layers,
-            num_attention_heads=args.decoder_heads or encoder.config.num_attention_heads,
-            pad_token_id=schema_tokenizer.pad_token_id,
-            hidden_dropout_prob=args.dropout,
-            attention_probs_dropout_prob=args.dropout,
-        )
-        decoder = transformers.BertModel(decoder_config)
-
-        model = EncoderDecoderWPointerModel(
-            encoder=encoder,
-            decoder=decoder,
-            max_src_len=max_src_len,
-            dropout=args.dropout,
-            model_args=args,
-        )
-
-    else:  # if args.encoder_model is not specified
+    Returns:
+        EncoderDecoderWPointerModel
+    """
+    if not args.encoder_model:
+        # initialize the model from scratch
         model = EncoderDecoderWPointerModel.from_parameters(
             layers=args.layers,
             hidden=args.hidden,
@@ -262,46 +200,65 @@ def main(args):
             decoder_layers=args.decoder_layers,
             decoder_hidden=args.decoder_hidden,
             decoder_heads=args.decoder_heads,
-            src_vocab_size=text_tokenizer.vocab_size,
+            src_vocab_size=schema_tokenizer.src_tokenizer.vocab_size,
             tgt_vocab_size=schema_tokenizer.vocab_size,
-            encoder_pad_token_id=text_tokenizer.pad_token_id,
+            encoder_pad_token_id=schema_tokenizer.src_tokenizer.pad_token_id,
             decoder_pad_token_id=schema_tokenizer.pad_token_id,
             max_src_len=max_src_len,
             dropout=args.dropout,
             model_args=args,
         )
+        return model
 
-    new_classes = None
-    if args.new_classes_file is not None:
-        with open(args.new_classes_file) as f:
-            new_classes = f.read().strip().split("\n")
-            wandb_logger.log_hyperparams({"new_classes": " ".join(new_classes)})
+    # use a pretrained model as an encoder
 
-    logger.info("Preparing for training")
+    if preprocess_args is not None and preprocess_args["text_tokenizer"] != args.encoder_model:
+        logger.warning("Data may have been preprocessed with a different tokenizer")
+        logger.warning(f'Preprocessing tokenizer     : {preprocess_args["text_tokenizer"]}')
+        logger.warning(f"Pretrained encoder tokenizer: {args.encoder_model}")
 
-    adam_eps = 1e-7 if args.fp16 else 1e-9
+    encoder_config = transformers.AutoConfig.from_pretrained(args.encoder_model)
+    encoder_config.hidden_dropout_prob = args.dropout
+    encoder_config.attention_probs_dropout_prob = args.dropout
 
-    freezing_schedule = EncDecFreezingSchedule.from_args(args)
+    encoder = transformers.AutoModel.from_pretrained(args.encoder_model, config=encoder_config)
 
-    wandb_logger.log_hyperparams({"num_data": len(train_dataset)})
+    if encoder.config.vocab_size != schema_tokenizer.src_tokenizer.vocab_size:
+        raise ValueError("Preprocessing tokenizer and model tokenizer are not compatible")
 
-    lightning_module = PointerModule(
-        model=model,
-        schema_tokenizer=schema_tokenizer,
-        train_dataset=train_dataset,
-        valid_dataset=eval_dataset,
-        lr=args.lr,
-        batch_size=args.batch_size,
-        warmup_steps=args.warmup_steps,
-        weight_decay=args.weight_decay,
-        adam_eps=adam_eps,
-        log_every=args.log_every,
-        monitor_classes=new_classes,
-        freezing_schedule=freezing_schedule,
+    ffn_hidden = 4 * args.decoder_hidden if args.decoder_hidden is not None else None
+
+    decoder_config = transformers.BertConfig(
+        is_decoder=True,
+        vocab_size=schema_tokenizer.vocab_size + max_src_len,
+        hidden_size=args.decoder_hidden or encoder.config.hidden_size,
+        intermediate_size=ffn_hidden or encoder.config.intermediate_size,
+        num_hidden_layers=args.decoder_layers or encoder.config.num_hidden_layers,
+        num_attention_heads=args.decoder_heads or encoder.config.num_attention_heads,
+        pad_token_id=schema_tokenizer.pad_token_id,
+        hidden_dropout_prob=args.dropout,
+        attention_probs_dropout_prob=args.dropout,
+    )
+    decoder = transformers.BertModel(decoder_config)
+
+    model = EncoderDecoderWPointerModel(
+        encoder=encoder,
+        decoder=decoder,
+        max_src_len=max_src_len,
+        dropout=args.dropout,
+        model_args=args,
     )
 
-    wandb_logger.watch(lightning_module, log="all", log_freq=args.log_every)
+    return model
 
+
+def make_trainer(args, wandb_logger):
+    """Make lightning Trainer with callbacks for checkpointing, early stopping and lr logging.
+
+    Args:
+        args: argparse object from parse_args()
+        wandb_logger: lightning WandbLogger object
+    """
     # there is a werid bug that checkpoint_callback creates checkpoints
     # in the filepath subfolder, e.g. if you specify filepath=output_dir
     # the checkpoints will be created in output_dir/..
@@ -310,7 +267,7 @@ def main(args):
     checkpoint_callback = TransformersModelCheckpoint(
         filepath=path_join(args.output_dir, "pl_checkpoint.ckpt"),
         save_top_k=1,
-        verbose=True,
+        verbose=False,
         monitor="eval_exact_match",
         mode="max",
         prefix="",
@@ -340,55 +297,116 @@ def main(args):
         early_stop_callback=early_stopping,
         gradient_clip_val=args.max_grad_norm,
         precision=16 if args.fp16 else 32,
-        row_log_interval=args.log_every,
+        row_log_interval=1,
         limit_val_batches=args.eval_data_amount,
         callbacks=[lr_logger],
     )
+    return trainer
+
+
+def main(args):
+    logger.info(f"Starting training with args: {args}")
+
+    utils.set_seed(args.seed)
+
+    wandb_logger = WandbLogger(project=args.wandb_project, tags=args.tags)
+    wandb_logger.log_hyperparams(args)
+
+    if os.path.exists(args.output_dir):
+        raise ValueError(f"output_dir {args.output_dir} already exists")
+
+    logger.info("Loading tokenizers")
+    schema_tokenizer = TopSchemaTokenizer.load(path_join(args.data_dir, "tokenizer"))
+
+    logger.info("Loading data")
+    datasets = torch.load(path_join(args.data_dir, "data.pkl"))
+    train_dataset: PointerDataset = datasets["train_dataset"]
+    eval_dataset: PointerDataset = datasets["valid_dataset"]
+
+    if args.fp16:
+        train_dataset.fp16 = True
+        eval_dataset.fp16 = True
+
+    max_src_len, _ = train_dataset.get_max_len()
+
+    try:
+        with open(path_join(args.data_dir, "args.toml")) as f:
+            preprocess_args = toml.load(f)
+            if preprocess_args["version"] != SAVE_FORMAT_VERSION:
+                logger.warning(
+                    "Binary data version differs from the current version. "
+                    "May cause failing and unexpected behavior"
+                )
+            wandb.config.update({"preprocess_" + k: v for k, v in preprocess_args.items()})
+
+    except FileNotFoundError:
+        preprocess_args = None
+
+    logger.info("Creating a model")
+    model = make_model(schema_tokenizer, max_src_len, args, preprocess_args)
+
+    logger.info("Preparing for training")
+
+    new_classes = None
+    if args.new_classes_file is not None:
+        with open(args.new_classes_file) as f:
+            new_classes = f.read().strip().split("\n")
+            wandb_logger.log_hyperparams({"new_classes": " ".join(new_classes)})
+
+    adam_eps = 1e-7 if args.fp16 else 1e-9
+
+    freezing_schedule = EncDecFreezingSchedule.from_args(args)
+
+    wandb_logger.log_hyperparams({"num_data": len(train_dataset)})
+
+    lightning_module = PointerModule(
+        model=model,
+        schema_tokenizer=schema_tokenizer,
+        train_dataset=train_dataset,
+        valid_dataset=eval_dataset,
+        lr=args.lr,
+        batch_size=args.batch_size,
+        warmup_steps=args.warmup_steps,
+        weight_decay=args.weight_decay,
+        adam_eps=adam_eps,
+        log_every=args.log_every,
+        monitor_classes=new_classes,
+        freezing_schedule=freezing_schedule,
+    )
+
+    wandb_logger.watch(lightning_module, log="all", log_freq=args.log_every)
+
+    trainer = make_trainer(args, wandb_logger)
 
     # --- FIT
-    utils.check_config(lightning_module, trainer, args)
+    cli_utils.check_config(lightning_module, trainer, args)
 
     trainer.fit(lightning_module)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    logger.info("Training finished!")
 
     # top_k == 1 --> the last checkpoint is the best model
-    assert checkpoint_callback.save_top_k == 1
-    best_model_dir = os.path.dirname(checkpoint_callback.last_checkpoint_path)
-    model = EncoderDecoderWPointerModel.from_pretrained(best_model_dir)
-    model = model.to(device)
+    assert trainer.checkpoint_callback.save_top_k == 1
+    logger.info(f"Loading and evaluating the best model")
+
+    final_metrics, description = cli_utils.evaluate_model(
+        trainer.checkpoint_callback.last_checkpoint_path,
+        schema_tokenizer,
+        eval_dataset,
+        prefix="eval",
+    )
 
     with open(path_join(args.output_dir, "args.toml"), "w") as f:
         args_dict = {
             "version": SAVE_FORMAT_VERSION,
-            "pl_checkpoint_path": checkpoint_callback.last_checkpoint_path,
+            "pl_checkpoint_path": trainer.checkpoint_callback.last_checkpoint_path,
+            "metrics": final_metrics,
             **vars(args),
         }
         toml.dump(args_dict, f)
 
-    logger.info("Training finished!")
-    device = model.device
-    del model
-
-    # top_k == 1 --> the last checkpoint is the best model
-    assert checkpoint_callback.save_top_k == 1
-    best_model_dir = os.path.dirname(checkpoint_callback.last_checkpoint_path)
-    logger.info(f"Loading the best model from {best_model_dir}")
-
-    model = EncoderDecoderWPointerModel.from_pretrained(best_model_dir)
-    model = model.to(device)
-    model.eval()
-
-    logger.info("Computing final evaluation metrics on full dataset")
-
-    final_logs = trainer.test(lightning_module, lightning_module.val_dataloader(subset_size=0.7))
-
-    final_logs = {"best" + k.lstrip("test"): v for k, v in final_logs["test_metrics"].items()}
-
-    for k, v in final_logs.items():
-        logger.info(f"{k}\t: {v}")
-
-    wandb_logger.log_metrics(final_logs)
+    logger.info(description)
+    wandb_logger.log_metrics({**final_metrics["means"], **final_metrics["stdevs"]})
     wandb_logger.close()
 
 

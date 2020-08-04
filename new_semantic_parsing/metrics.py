@@ -13,16 +13,14 @@
 # limitations under the License.
 # =============================================================================
 """Metrics computation."""
+
 from collections import Counter
 from functools import reduce
 from operator import add
 from typing import List
 from pprint import pformat
 
-import numpy as np
 import torch
-
-from new_semantic_parsing.dataclasses import Seq2SeqEvalPrediciton
 
 
 LBR = "["
@@ -165,6 +163,54 @@ class Tree:
         return tree
 
 
+# Main function
+
+
+def get_metrics(
+    pred_tokens, true_tokens, monitor_classes, prefix, schema_tokenizer, do_each=False
+):
+    """Compute exact_match and tree-based metrics
+
+    Apply prefix to all keys.
+    The main purpuse of this function is to unify evaluation in PointerModule and cli_utils.evaluate_model()
+
+    Args:
+        pred_tokens: List[List[str]]
+        true_tokens: List[List[str]]
+        monitor_classes: List[str]
+        prefix: str, will be appended to all return dict keys
+        schema_tokenizer: TopSchemaTokenizer
+        do_each: bool, if False compute tree path metrics only for monitor_classes[0] and overall
+            if True compute tree path metrics for all monitor_classes and overall
+
+    Returns:
+        dictionary with keys
+            {prefix}_{score_name}
+            {prefix}_new_classes_{score_name}
+            cls/{prefix}_{monitor_classes[i]}_{score_name}; if do_each=False then only i == 0, else for each class
+        for each score_name - key from get_tree_path_scores output dictionary
+    """
+    exact_match = sum(int(str(p) == str(l)) for p, l in zip(pred_tokens, true_tokens))
+    exact_match /= len(true_tokens)
+
+    tree_metrics = get_tree_path_metrics(
+        pred_tokens, true_tokens, monitor_classes, prefix, do_each
+    )
+
+    pred_strs = [schema_tokenizer.detokenize(p) for p in pred_tokens]
+    true_strs = [schema_tokenizer.detokenize(p) for p in true_tokens]
+
+    exact_match_str = sum(int(p == t) for p, t in zip(pred_strs, true_strs)) / len(true_strs)
+
+    log_dict = {
+        f"{prefix}_exact_match": exact_match,
+        f"{prefix}_exact_match_str": exact_match_str,
+        **tree_metrics,
+    }
+
+    return log_dict
+
+
 # Tree path scores
 
 
@@ -185,41 +231,33 @@ def get_tree_path_metrics(pred_tokens, true_tokens, monitor_classes, prefix, do_
         dictionary with keys
             {prefix}_{score_name}
             {prefix}_new_classes_{score_name}
-            {prefix}_{monitor_classes[0]}_{score_name}
+            cls/{prefix}_{monitor_classes[i]}_{score_name}, if do_each=False then i is only == 0
         for each score_name - key from get_tree_path_scores output dictionary
     """
 
     tree_path_scores = get_tree_path_scores(pred_tokens=pred_tokens, true_tokens=true_tokens)
     tree_path_scores = {f"{prefix}_{k}": v for k, v in tree_path_scores.items()}
 
-    tree_path_scores_new_cls = dict()
-    tree_path_scores_new_cls_main = dict()
     if monitor_classes is not None:
-        tree_path_scores_new_cls = get_tree_path_scores(
+        _new_classes_scores = get_tree_path_scores(
             pred_tokens=pred_tokens, true_tokens=true_tokens, classes=monitor_classes
         )
-        tree_path_scores_new_cls = {
-            f"{prefix}_new_classes_{k}": v for k, v in tree_path_scores_new_cls.items()
+        _new_classes_scores = {
+            f"{prefix}_new_classes_{k}": v for k, v in _new_classes_scores.items()
         }
+        tree_path_scores.update(_new_classes_scores)
 
         for i, class_ in enumerate(monitor_classes):
             if i > 0 and not do_each:
                 break
 
-            tree_path_scores_new_cls_main = get_tree_path_scores(
+            _class_score = get_tree_path_scores(
                 pred_tokens=pred_tokens, true_tokens=true_tokens, classes=[class_]
             )
-            tree_path_scores_new_cls_main = {
-                f"{prefix}_{class_}_{k}": v for k, v in tree_path_scores_new_cls_main.items()
-            }
+            _class_score = {f"cls/{prefix}_{class_}_{k}": v for k, v in _class_score.items()}
+            tree_path_scores.update(_class_score)
 
-    tree_metrics = {
-        **tree_path_scores,
-        **tree_path_scores_new_cls,
-        **tree_path_scores_new_cls_main,
-    }
-
-    return tree_metrics
+    return tree_path_scores
 
 
 def get_tree_path_scores(pred_tokens, true_tokens, classes=None):
@@ -277,8 +315,6 @@ def get_tree_path_scores(pred_tokens, true_tokens, classes=None):
         f1 = 2 * precision * recall / (precision + recall)
 
     return {
-        "predicted_paths": n_predicted,
-        "expected_paths": n_expected,
         "tree_path_precision": precision,
         "tree_path_recall": recall,
         "tree_path_f1": f1,
