@@ -42,7 +42,7 @@ logging.basicConfig(
     level=logging.INFO,
     stream=sys.stdout,
 )
-logger = logging.getLogger(__file__)
+logger = logging.getLogger(os.path.basename(__file__))
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -79,6 +79,51 @@ def parse_args(args=None):
     return args
 
 
+def train_finetune_split(train_data, schema_vocab, split_amount, split_class=None):
+    """Split train_data into train and finetune parts with ratio split_amount.
+
+    Train part should contain all classses from the original train_data.
+    If split_class is provided, split across examples containing this class.
+    E.i. split_amount of data with split_class goes to finetune set.
+
+    Args:
+        train_data: pd.DataFrame
+        schema_vocab: set of tokens
+        split_amount: float
+        split_class: if provided, split across the specified class
+    """
+    # Get a small set of examples that contains all classes from schema_vocab
+    required_example_ids = utils.get_required_example_ids(schema_vocab, train_data)
+
+    ids = set(range(len(train_data)))
+    if split_class is not None:
+        ids = set(train_data.index[train_data.schema.str.contains(split_class)])
+        logger.info(f"Moving {100 * split_amount}% of {split_class} into a finetuning subset")
+
+    split_ids = list(ids - required_example_ids)
+
+    take = int(len(split_ids) * split_amount)
+    leave = len(train_data) - take
+
+    assert take > 0
+
+    logger.info(f"Taking {take} examples and leaving {leave} examples")
+
+    shuffle(split_ids)
+    subset_ids = split_ids[:take]
+
+    subset_ids_set = set(subset_ids)
+    all_ids = set(range(len(train_data)))
+
+    assert len(subset_ids_set.intersection(required_example_ids)) == 0
+    train_data_ids = list(all_ids - subset_ids_set | required_example_ids)
+
+    finetune_data = train_data.iloc[subset_ids]
+    train_data = train_data.iloc[train_data_ids]
+
+    return train_data, finetune_data
+
+
 def main(args):
     utils.set_seed(args.seed)
 
@@ -95,36 +140,11 @@ def main(args):
     schema_vocab = reduce(set.union, map(utils.get_vocab_top_schema, train_data.schema))
 
     if args.split_amount is not None:
-        # NOTE: this is not train/eval split, this is train/finetune split
         # finetune part is not used by train script, but used by retrain script
-
-        # Get a small set of examples that contains all classes from schema_vocab
-        required_example_ids = utils.get_required_example_ids(schema_vocab, train_data)
-
         logger.info("Splitting the training dataset")
-        split_ids = list(set(range(len(train_data))) - required_example_ids)
-
-        if args.split_class is not None:
-            split_ids = [
-                i for i, schema in enumerate(train_data.schema) if args.split_class in schema
-            ]
-            logger.info(
-                f"Moving {100 * args.split_amount}% of {args.split_class} into a finetuning subset"
-            )
-
-        take = int(len(split_ids) * args.split_amount)
-        leave = len(split_ids) - take
-
-        assert take > 0
-
-        logger.info(f"Taking {take} examples and leaving {leave} examples")
-
-        shuffle(split_ids)
-        subset_ids = split_ids[:take]
-        train_data_ids = list(set(range(len(train_data))) - set(subset_ids) | required_example_ids)
-
-        finetune_data = train_data.iloc[subset_ids]
-        train_data = train_data.iloc[train_data_ids]
+        train_data, finetune_data = train_finetune_split(
+            train_data, schema_vocab, args.split_amount, args.split_class
+        )
 
         os.makedirs(args.output_dir)
 
