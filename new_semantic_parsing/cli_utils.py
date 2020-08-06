@@ -16,24 +16,21 @@
 
 import os
 
-import numpy as np
-
+import toml
 import torch
 import wandb
 
+import numpy as np
 from tqdm.auto import tqdm
 
-from new_semantic_parsing import (
-    metrics,
-    EncoderDecoderWPointerModel,
-    PointerModule,
-    TopSchemaTokenizer,
-)
+import new_semantic_parsing as nsp
+import new_semantic_parsing.metrics
+from cli.retrain import logger
 
 
 def evaluate_model(
     checkpoint_path,
-    schema_tokenizer: TopSchemaTokenizer,
+    schema_tokenizer: nsp.TopSchemaTokenizer,
     eval_dataset,
     prefix,
     n_rounds=5,
@@ -62,10 +59,10 @@ def evaluate_model(
     """
 
     best_model_dir = os.path.dirname(checkpoint_path)
-    model = EncoderDecoderWPointerModel.from_pretrained(best_model_dir)
+    model = nsp.EncoderDecoderWPointerModel.from_pretrained(best_model_dir)
     model.eval()
 
-    lightning_module = PointerModule.load_from_checkpoint(
+    lightning_module = nsp.PointerModule.load_from_checkpoint(
         checkpoint_path,
         model=model,
         schema_tokenizer=schema_tokenizer,
@@ -73,36 +70,25 @@ def evaluate_model(
         valid_dataset=eval_dataset,
     )
 
-    pred_ids, _ = iterative_prediction(
+    _, pred_tokens = iterative_prediction(
         lightning_module.model,
         lightning_module.val_dataloader(),
         schema_tokenizer,
         max_len=max_len,
         num_beams=num_beams,
         device="cuda" if torch.cuda.is_available() else "cpu",
+        return_tokens=True,
     )
 
-    pred_tokens = [
-        schema_tokenizer.decode(t, source_ids=s, return_tokens=True, skip_special_tokens=True)
-        for t, s in zip(pred_ids, lightning_module.valid_dataset.source_tensors)
-    ]
+    true_tokens = _get_true_tokens(lightning_module.valid_dataset, schema_tokenizer)
 
-    true_ids = lightning_module.valid_dataset.target_tensors
-    true_tokens = [
-        schema_tokenizer.decode(t, source_ids=s, return_tokens=True, skip_special_tokens=True)
-        for t, s in zip(true_ids, lightning_module.valid_dataset.source_tensors)
-    ]
-
-    subset_size_int = int(subset_size * len(pred_tokens))
     all_final_metrics = []
     for _ in tqdm(range(n_rounds), desc="Computing metrics"):
-        permutation = np.random.permutation(len(pred_tokens))
-        permutation = permutation[:subset_size_int]
+        predictions_subset, labels_subset = _get_random_subsets(
+            pred_tokens, true_tokens, subset_size
+        )
 
-        predictions_subset = [pred_tokens[i] for i in permutation]
-        labels_subset = [true_tokens[i] for i in permutation]
-
-        _final_metrics = metrics.get_metrics(
+        _final_metrics = nsp.metrics.get_metrics(
             predictions_subset,
             labels_subset,
             monitor_classes=schema_tokenizer.vocab,
@@ -112,19 +98,45 @@ def evaluate_model(
         )
         all_final_metrics.append(_final_metrics)
 
-    final_metrics = {
+    metrics_statistic = _get_metrics_staistic(all_final_metrics)
+    description = _get_description(metrics_statistic)
+    return metrics_statistic, description
+
+
+def _get_true_tokens(dataset, schema_tokenizer):
+    true_ids = dataset.target_tensors
+    true_tokens = [
+        schema_tokenizer.decode(t, source_ids=s, return_tokens=True, skip_special_tokens=True)
+        for t, s in zip(true_ids, dataset.source_tensors)
+    ]
+    return true_tokens
+
+
+def _get_random_subsets(pred_tokens, true_tokens, subset_size):
+    subset_size_int = int(subset_size * len(pred_tokens))
+
+    permutation = np.random.permutation(len(pred_tokens))
+    permutation = permutation[:subset_size_int]
+
+    predictions_subset = [pred_tokens[i] for i in permutation]
+    labels_subset = [true_tokens[i] for i in permutation]
+
+    return predictions_subset, labels_subset
+
+
+def _get_metrics_staistic(metrics):
+    metrics_statistics = {
         "means": {},
         "stdevs": {},
     }
 
-    metric_names = all_final_metrics[0].keys()
+    metric_names = metrics[0].keys()
     for metric_name in metric_names:
-        metric = [m[metric_name] for m in all_final_metrics]
-        final_metrics["means"][metric_name] = np.mean(metric)
-        final_metrics["stdevs"][metric_name + "_std"] = np.std(metric)
+        metric = [m[metric_name] for m in metrics]
+        metrics_statistics["means"][metric_name] = np.mean(metric)
+        metrics_statistics["stdevs"][metric_name + "_std"] = np.std(metric)
 
-    description = _get_description(final_metrics)
-    return final_metrics, description
+    return metrics_statistics
 
 
 def _get_description(final_metrics):
@@ -168,7 +180,15 @@ def check_config(pointer_module, trainer, args, strict=False):
             assert param_group["weight_decay"] == args.weight_decay
 
 
-def iterative_prediction(model, dataloader, schema_tokenizer, max_len, num_beams, device="cpu"):
+def iterative_prediction(
+    model,
+    dataloader,
+    schema_tokenizer: nsp.TopSchemaTokenizer,
+    max_len,
+    num_beams,
+    device="cpu",
+    return_tokens=False,
+):
     model = model.to(device)
 
     predictions_ids = []
@@ -194,7 +214,10 @@ def iterative_prediction(model, dataloader, schema_tokenizer, max_len, num_beams
             predictions_ids.append(prediction)
 
             prediction_str: str = schema_tokenizer.decode(
-                prediction, batch["input_ids"][i], skip_special_tokens=True,
+                prediction,
+                batch["input_ids"][i],
+                skip_special_tokens=True,
+                return_tokens=return_tokens,
             )
             predictions_str.append(prediction_str)
 
@@ -233,7 +256,7 @@ def get_outliers(pretrain_metrics, final_metrics, filter_by_name=None):
     return negative_outliers, positive_outliers
 
 
-def get_outliers_logs(outliers, pretrain_metrics, final_metrics, prefix, suffix):
+def get_outliers_logs(outliers, pretrain_metrics, final_metrics, prefix, suffix, class_weights):
     table = wandb.Table(
         columns=[
             "metric_name",
@@ -246,15 +269,15 @@ def get_outliers_logs(outliers, pretrain_metrics, final_metrics, prefix, suffix)
         ]
     )
 
-    abs_deltas = []
-    rel_deltas = []
+    abs_deltas = {}
+    rel_deltas = {}
     digits = 4
 
     for name in outliers:
         abs_delta = final_metrics["means"][name] - pretrain_metrics["means"][name]
         rel_delta = abs_delta / pretrain_metrics["means"][name]
-        abs_deltas.append(abs_delta)
-        rel_deltas.append(rel_delta)
+        abs_deltas[name] = abs_delta
+        rel_deltas[name] = rel_delta
 
         table.add_data(
             name,
@@ -266,8 +289,15 @@ def get_outliers_logs(outliers, pretrain_metrics, final_metrics, prefix, suffix)
             round(rel_delta, digits),
         )
 
-    abs_delta_overall = round(sum(abs_deltas) / len(abs_deltas), digits)
-    rel_delta_overall = round(sum(rel_deltas) / len(rel_deltas), digits)
+    abs_delta_overall = 0
+    rel_delta_overall = 0
+
+    if len(abs_deltas) > 0:
+        abs_delta_overall = sum(class_weights[name] * v for name, v in abs_deltas.items())
+        rel_delta_overall = sum(class_weights[name] * v for name, v in rel_deltas.items())
+
+        abs_delta_overall = round(abs_delta_overall, digits)
+        rel_delta_overall = round(rel_delta_overall, digits)
 
     res = {
         f"{prefix}_outliers": table,
@@ -275,3 +305,81 @@ def get_outliers_logs(outliers, pretrain_metrics, final_metrics, prefix, suffix)
         f"relative_{suffix}": rel_delta_overall,
     }
     return res
+
+
+def load_saved_args(path):
+    with open(path) as f:
+        train_args = toml.load(f)
+        if train_args["version"] != nsp.SAVE_FORMAT_VERSION:
+            logger.warning(
+                "Binary data version differs from the current version. "
+                "This may cause failing and unexpected behavior."
+            )
+
+        if "metrics" in train_args:
+            # for some reason means and stdevs are saved as strings
+            train_args["metrics"]["means"] = {
+                k: float(v) for k, v in train_args["metrics"]["means"].items()
+            }
+            train_args["metrics"]["stdevs"] = {
+                k: float(v) for k, v in train_args["metrics"]["stdevs"].items()
+            }
+
+    return train_args
+
+
+def evaluate_finetuning_procedure(pretrain_metrics, final_metrics, class_weights):
+    """Identify the classes that degraded for sure and improved for sure, compute RI and RD"""
+
+    deltas = get_metrics_delta(pretrain_metrics, final_metrics, filter_by_name="f1")
+
+    negative_outliers, positive_outliers = get_outliers(
+        pretrain_metrics, final_metrics, filter_by_name="f1"
+    )
+
+    positive_outliers_metrics, negative_outliers_metrics = {}, {}
+
+    if len(negative_outliers):
+        logger.info(f"{len(negative_outliers)} classes degraded: {negative_outliers}")
+        negative_outliers_metrics = get_outliers_logs(
+            negative_outliers,
+            pretrain_metrics,
+            final_metrics,
+            prefix="negative",
+            suffix="degradation",
+            class_weights=class_weights,
+        )
+
+    if len(positive_outliers):
+        logger.info(f"{len(positive_outliers)} classes improved: {positive_outliers}")
+        positive_outliers_metrics = get_outliers_logs(
+            positive_outliers,
+            pretrain_metrics,
+            final_metrics,
+            prefix="positive",
+            suffix="improvement",
+            class_weights=class_weights,
+        )
+
+    metrics = {
+        **deltas,
+        **positive_outliers_metrics,
+        **negative_outliers_metrics,
+        "n_negative_outliers": len(negative_outliers),
+        "n_positive_outliers": len(positive_outliers),
+    }
+    return metrics
+
+
+def get_metrics_delta(pretrain_metrics, final_metrics, filter_by_name=None):
+    deltas = {}
+
+    for metric_name, pretrain_mean in pretrain_metrics["means"].items():
+        if metric_name.endswith("_std"):
+            continue
+        if filter_by_name and filter_by_name not in metric_name:
+            continue
+
+        deltas["delta/" + metric_name] = final_metrics["means"][metric_name] - pretrain_mean
+
+    return deltas

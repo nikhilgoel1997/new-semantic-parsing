@@ -31,8 +31,12 @@ from os.path import join as path_join
 import toml
 import torch
 import pytorch_lightning as pl
+import pytorch_lightning.loggers
 
 import new_semantic_parsing as nsp
+import new_semantic_parsing.callbacks
+import new_semantic_parsing.dataclasses
+
 from new_semantic_parsing import utils, cli_utils, optimization
 
 
@@ -126,7 +130,6 @@ def parse_args(args=None):
     parser.add_argument("--wandb-project", default=None)
     parser.add_argument("--log-every", default=None, type=int)
     parser.add_argument("--tags", default=None)
-    parser.add_argument("--fp16", default=False, action="store_true")
     parser.add_argument("--gpus", default=None, type=int,
                         help="Number of gpus to train the model on")
     parser.add_argument("--clean-output", default=False, action="store_true")
@@ -167,6 +170,48 @@ def parse_args(args=None):
         raise ValueError(args.old_data_sampling_method)
 
     return args
+
+
+def load_tokenizer(model_dir, data_dir):
+    tokenizer_path1 = model_dir
+    tokenizer_path2 = path_join(data_dir, "tokenizer")
+
+    if os.path.exists(path_join(tokenizer_path1, "schema_vocab.txt")):
+        schema_tokenizer = nsp.TopSchemaTokenizer.load(tokenizer_path1)
+    elif os.path.exists(tokenizer_path2):
+        schema_tokenizer = nsp.TopSchemaTokenizer.load(tokenizer_path2)
+    else:
+        raise ValueError("Tokenizer is not found in both --model-dir and --data-dir")
+
+    return schema_tokenizer
+
+
+def load_data(path, new_data_amount, old_data_amount, old_data_sampling_method, wandb_logger):
+    datasets = torch.load(path)
+    train_dataset: nsp.PointerDataset = datasets["finetune_dataset"]
+    if train_dataset is None:
+        raise RuntimeError("Datafile provided does not contain finetune_dataset")
+
+    eval_dataset: nsp.PointerDataset = datasets["valid_dataset"]
+
+    train_subset = train_dataset
+    if new_data_amount is not None and new_data_amount < 1.0:
+        train_subset = utils.make_subset(train_subset, new_data_amount)
+
+    wandb_logger.log_hyperparams({"num_new_data": len(train_subset)})
+
+    if old_data_amount > 0:
+        if old_data_sampling_method == nsp.dataclasses.SamplingMethods.merge_subset:
+            old_data_subset = utils.make_subset(datasets["train_dataset"], old_data_amount)
+            train_subset = torch.utils.data.ConcatDataset([train_subset, old_data_subset])
+        elif old_data_sampling_method == nsp.dataclasses.SamplingMethods.sample:
+            train_subset = nsp.data.SampleConcatSubset(
+                train_subset, datasets["train_dataset"], old_data_amount
+            )
+        else:
+            raise ValueError(old_data_sampling_method)
+
+    return train_subset, eval_dataset
 
 
 def load_model(model_dir, dropout=None, move_norm=None, move_norm_p=None, label_smoothing=None):
@@ -243,7 +288,6 @@ def load_trainer(checkpoint_path, args, wandb_logger):
         min_steps=args.min_steps,
         checkpoint_callback=checkpoint_callback,
         early_stop_callback=early_stopping,
-        precision=16 if args.fp16 else 32,
         callbacks=[lr_logger],
         row_log_interval=1,
         limit_val_batches=args.eval_data_amount,
@@ -253,7 +297,7 @@ def load_trainer(checkpoint_path, args, wandb_logger):
     return trainer
 
 
-def modify_checkpoint(
+def modify_checkpoint_for_retraining(
     checkpoint_path, weight_decay, output_dir, no_opt_state=False, lightning_module=None
 ):
     """Load checkpoint file, modify it and save a modified checkpoint to output_dir
@@ -298,95 +342,22 @@ def modify_checkpoint(
     return initial_checkpoint_path
 
 
-def main(args):
-    utils.set_seed(args.seed)
-
-    wandb_logger = pl.loggers.WandbLogger(project=args.wandb_project, tags=args.tags)
-    wandb_logger.log_hyperparams(args)
-
-    logger.info(f"Starting finetuning with args: \n{pprint.pformat(vars(args))}")
-
-    if os.path.exists(args.output_dir):
-        raise ValueError(f"output_dir {args.output_dir} already exists")
-
-    logger.info("Loading tokenizers")
-
-    tokenizer_path1 = args.model_dir
-    tokenizer_path2 = path_join(args.data_dir, "tokenizer")
-
-    if os.path.exists(path_join(tokenizer_path1, "schema_vocab.txt")):
-        schema_tokenizer = nsp.TopSchemaTokenizer.load(tokenizer_path1)
-    elif os.path.exists(tokenizer_path2):
-        schema_tokenizer = nsp.TopSchemaTokenizer.load(tokenizer_path2)
-    else:
-        raise ValueError("Tokenizer is not found in both --model-dir and --data-dir")
-
-    logger.info("Loading data")
-
-    datasets = torch.load(path_join(args.data_dir, "data.pkl"))
-    train_dataset: nsp.PointerDataset = datasets["finetune_dataset"]
-    if train_dataset is None:
-        raise RuntimeError("Datafile provided does not contain finetune_dataset")
-
-    eval_dataset: nsp.PointerDataset = datasets["valid_dataset"]
-
-    if args.fp16:
-        train_dataset.fp16 = True
-        eval_dataset.fp16 = True
-
-    max_src_len, _ = train_dataset.get_max_len()
-
-    with open(path_join(args.model_dir, "args.toml")) as f:
-        train_args = toml.load(f)
-        if train_args["version"] != nsp.SAVE_FORMAT_VERSION:
-            logger.warning(
-                "Binary data version differs from the current version. "
-                "May cause failing and unexpected behavior"
-            )
-            # do not log metrics as hyperparameters!
-            wandb_logger.log_hyperparams(
-                {"pretrain_" + k: v for k, v in train_args.items() if k != "metrics"}
-            )
-
-        # for some reason means and stdevs are saved as strings
-        train_args["metrics"]["means"] = {
-            k: float(v) for k, v in train_args["metrics"]["means"].items()
-        }
-        train_args["metrics"]["stdevs"] = {
-            k: float(v) for k, v in train_args["metrics"]["stdevs"].items()
-        }
-
-    train_subset = train_dataset
-    if args.new_data_amount is not None and args.new_data_amount < 1.0:
-        train_subset = utils.make_subset(train_subset, args.new_data_amount)
-
-    wandb_logger.log_hyperparams({"num_new_data": len(train_subset)})
-
-    if args.old_data_amount > 0:
-        if args.old_data_sampling_method == nsp.dataclasses.SamplingMethods.merge_subset:
-            old_data_subset = utils.make_subset(datasets["train_dataset"], args.old_data_amount)
-            train_subset = torch.utils.data.ConcatDataset([train_subset, old_data_subset])
-        elif args.old_data_sampling_method == nsp.dataclasses.SamplingMethods.sample:
-            train_subset = nsp.data.SampleConcatSubset(
-                train_subset, datasets["train_dataset"], args.old_data_amount
-            )
-        else:
-            raise ValueError(args.old_data_sampling_method)
-
-    wandb_logger.log_hyperparams({"num_total_data": len(train_subset)})
-
-    logger.info("Loading model")
-    model = load_model(
-        args.model_dir, args.dropout, args.move_norm, args.move_norm_p, args.label_smoothing
-    )
+def load_lightning_module(
+    checkpoint_path: str,
+    model: nsp.EncoderDecoderWPointerModel,
+    train_dataset: nsp.PointerDataset,
+    eval_dataset: nsp.PointerDataset,
+    schema_tokenizer: nsp.TopSchemaTokenizer,
+    args: argparse.Namespace,
+    wandb_logger: pl.loggers.WandbLogger,
+):
+    """Load lightning module with some of the parameters overwritten."""
 
     new_classes = None
     if args.new_classes_file is not None:
         with open(args.new_classes_file) as f:
             new_classes = f.read().strip().split("\n")
             wandb_logger.log_hyperparams({"new_classes": " ".join(new_classes)})
-
-    logger.info("Preparing for training")
 
     # Lightning loads all params which are not specified in .load_from_checkpoint
     # thus, some arguments are only provided if we want to override the loaded values
@@ -402,16 +373,68 @@ def main(args):
     module_kwargs["freezing_schedule"] = nsp.dataclasses.EncDecFreezingSchedule.from_args(args)
 
     lightning_module = nsp.PointerModule.load_from_checkpoint(
-        train_args["pl_checkpoint_path"],
+        checkpoint_path,
         model=model,
         schema_tokenizer=schema_tokenizer,
-        train_dataset=train_subset,
+        train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         monitor_classes=new_classes,
         **module_kwargs,
     )
 
-    checkpoint_path = modify_checkpoint(
+    return lightning_module
+
+
+def main(args):
+    utils.set_seed(args.seed)
+
+    if os.path.exists(args.output_dir):
+        raise ValueError(f"output_dir {args.output_dir} already exists")
+
+    wandb_logger = pl.loggers.WandbLogger(project=args.wandb_project, tags=args.tags)
+    wandb_logger.log_hyperparams(args)
+
+    logger.info(f"Starting finetuning with args: \n{pprint.pformat(vars(args))}")
+
+    logger.info("Loading tokenizers")
+    schema_tokenizer = load_tokenizer(args.model_dir, args.data_dir)
+
+    logger.info("Loading data")
+    train_dataset, eval_dataset = load_data(
+        path=path_join(args.data_dir, "data.pkl"),
+        new_data_amount=args.new_data_amount,
+        old_data_amount=args.old_data_amount,
+        old_data_sampling_method=args.old_data_sampling_method,
+        wandb_logger=wandb_logger,
+    )
+    train_args = cli_utils.load_saved_args(path_join(args.model_dir, "args.toml"))
+
+    # NOTE: do not log metrics as hyperparameters
+    wandb_logger.log_hyperparams(
+        {"pretrain_" + k: v for k, v in train_args.items() if k != "metrics"}
+    )
+
+    wandb_logger.log_hyperparams({"num_total_data": len(train_dataset)})
+
+    logger.info("Loading model")
+    model = load_model(
+        args.model_dir, args.dropout, args.move_norm, args.move_norm_p, args.label_smoothing
+    )
+
+    logger.info("Preparing for training")
+
+    lightning_module = load_lightning_module(
+        checkpoint_path=train_args["pl_checkpoint_path"],
+        model=model,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
+        schema_tokenizer=schema_tokenizer,
+        args=args,
+        wandb_logger=wandb_logger,
+    )
+
+    # override some of the parameters saved in the Trainer
+    checkpoint_path = modify_checkpoint_for_retraining(
         train_args["pl_checkpoint_path"],
         args.weight_decay,
         args.output_dir,
@@ -461,38 +484,12 @@ def main(args):
     logger.info(description)
     wandb_logger.log_metrics({**final_metrics["means"], **final_metrics["stdevs"]})
 
-    # identify the metircs that degraded for sure and improved for sure
-    negative_outliers, positive_outliers = cli_utils.get_outliers(
-        pretrain_metrics, final_metrics, filter_by_name="f1"
+    # Compute RI and RD
+    class_weights = eval_dataset.get_class_frequencies(schema_tokenizer)
+    finetuning_metrics = cli_utils.evaluate_finetuning_procedure(
+        pretrain_metrics, final_metrics, class_weights
     )
-    wandb_logger.log_metrics(
-        {
-            "n_negative_outliers": len(negative_outliers),
-            "n_positive_outliers": len(positive_outliers),
-        }
-    )
-
-    if len(negative_outliers):
-        logger.info(f"{len(negative_outliers)} classes degraded: {negative_outliers}")
-        _logs = cli_utils.get_outliers_logs(
-            negative_outliers,
-            pretrain_metrics,
-            final_metrics,
-            prefix="negative",
-            suffix="degradation",
-        )
-        wandb_logger.log_metrics(_logs)
-
-    if len(positive_outliers):
-        logger.info(f"{len(positive_outliers)} classes improved: {positive_outliers}")
-        _logs = cli_utils.get_outliers_logs(
-            positive_outliers,
-            pretrain_metrics,
-            final_metrics,
-            prefix="positive",
-            suffix="improvement",
-        )
-        wandb_logger.log_metrics(_logs)
+    wandb_logger.log_metrics(finetuning_metrics)
 
     wandb_logger.close()
 

@@ -29,6 +29,8 @@ import wandb
 import pytorch_lightning as pl
 
 import new_semantic_parsing as nsp
+import new_semantic_parsing.callbacks
+
 from new_semantic_parsing import utils, cli_utils
 
 
@@ -55,7 +57,7 @@ def parse_args(args=None):
                              "data.pkl, and args.toml")
     parser.add_argument("--output-dir", default=None,
                         help="directory to store checkpoints and other output files")
-    parser.add_argument("--eval-data-amount", default=0.5, type=float,
+    parser.add_argument("--eval-data-amount", default=1.0, type=float,
                         help="amount of validation set to use when training. "
                              "The final evaluation will use the full dataset.")
     parser.add_argument("--new-classes-file", default=None,
@@ -130,7 +132,6 @@ def parse_args(args=None):
     parser.add_argument("--wandb-project", default=None)
     parser.add_argument("--log-every", default=100, type=int)
     parser.add_argument("--tags", default=None)
-    parser.add_argument("--fp16", default=False, action="store_true")
     parser.add_argument("--gpus", default=None, type=int,
                         help="Lightning-only. Number of gpus to train the model on")
     parser.add_argument("--split-amount-finetune", default=None, type=float,
@@ -251,6 +252,7 @@ def make_trainer(args, wandb_logger):
     # the checkpoints will be created in output_dir/..
     # NOTE: we need save_top_k=1 fot checkpoint_callback.last_checkpoint_path
     # to point to the best model
+
     checkpoint_callback = nsp.callbacks.TransformersModelCheckpoint(
         filepath=path_join(args.output_dir, "pl_checkpoint.ckpt"),
         save_top_k=1,
@@ -283,7 +285,6 @@ def make_trainer(args, wandb_logger):
         checkpoint_callback=checkpoint_callback,
         early_stop_callback=early_stopping,
         gradient_clip_val=args.max_grad_norm,
-        precision=16 if args.fp16 else 32,
         row_log_interval=1,
         limit_val_batches=args.eval_data_amount,
         callbacks=[lr_logger],
@@ -310,21 +311,11 @@ def main(args):
     train_dataset: nsp.PointerDataset = datasets["train_dataset"]
     eval_dataset: nsp.PointerDataset = datasets["valid_dataset"]
 
-    if args.fp16:
-        train_dataset.fp16 = True
-        eval_dataset.fp16 = True
-
     max_src_len, _ = train_dataset.get_max_len()
 
     try:
-        with open(path_join(args.data_dir, "args.toml")) as f:
-            preprocess_args = toml.load(f)
-            if preprocess_args["version"] != nsp.SAVE_FORMAT_VERSION:
-                logger.warning(
-                    "Binary data version differs from the current version. "
-                    "May cause failing and unexpected behavior"
-                )
-            wandb.config.update({"preprocess_" + k: v for k, v in preprocess_args.items()})
+        preprocess_args = cli_utils.load_saved_args(path_join(args.data_dir, "args.toml"))
+        wandb.config.update({"preprocess_" + k: v for k, v in preprocess_args.items()})
 
     except FileNotFoundError:
         preprocess_args = None
@@ -340,8 +331,6 @@ def main(args):
             new_classes = f.read().strip().split("\n")
             wandb_logger.log_hyperparams({"new_classes": " ".join(new_classes)})
 
-    adam_eps = 1e-7 if args.fp16 else 1e-9
-
     freezing_schedule = nsp.dataclasses.EncDecFreezingSchedule.from_args(args)
 
     wandb_logger.log_hyperparams({"num_data": len(train_dataset)})
@@ -355,7 +344,6 @@ def main(args):
         batch_size=args.batch_size,
         warmup_steps=args.warmup_steps,
         weight_decay=args.weight_decay,
-        adam_eps=adam_eps,
         log_every=args.log_every,
         monitor_classes=new_classes,
         freezing_schedule=freezing_schedule,

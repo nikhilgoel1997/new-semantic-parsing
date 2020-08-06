@@ -105,6 +105,13 @@ class TopSchemaTokenizer:
     def special_ids(self):
         return [self.pad_token_id, self.bos_token_id, self.eos_token_id]
 
+    def index2token(self, i):
+        if i < self.vocab_size:
+            return self._itos[i]
+        else:
+            # returns ptr@{i-self.vocab_size}
+            return self.decode([i])[0]
+
     def encode(self, schema_text, source_ids, max_length=None, pad_to_max_length=False):
         return self.encode_plus(schema_text, source_ids, max_length, pad_to_max_length).ids
 
@@ -212,6 +219,11 @@ class TopSchemaTokenizer:
 
     def encode_source(self, source_text):
         return self.src_tokenizer.encode(source_text)
+
+    def is_schema_token_id(self, i):
+        """Checks if i correspond to the schema token or to the pointer token."""
+        is_special_token = i in [self.pad_token_id, self.bos_token_id, self.eos_token_id]
+        return i < self.vocab_size and not is_special_token
 
     def save(self, path, encoder_model_type=None):
         """
