@@ -21,9 +21,10 @@ import torch
 from torch.utils.data import DataLoader
 from pytorch_lightning import LightningModule
 
-from new_semantic_parsing.data import PointerDataset, Seq2SeqDataCollator
+import new_semantic_parsing.optimization as opt
+from new_semantic_parsing.data import PointerDataset, Seq2SeqDataCollator, SampleConcatSubset
 from new_semantic_parsing.metrics import compute_metrics_from_batch, get_tree_path_metrics
-from new_semantic_parsing.optimization import get_optimizers
+from new_semantic_parsing.dataclasses import EncDecFreezingSchedule
 from new_semantic_parsing.schema_tokenizer import TopSchemaTokenizer
 from new_semantic_parsing.modeling_encoder_decoder_wpointer import EncoderDecoderWPointerModel
 
@@ -63,6 +64,7 @@ class PointerModule(LightningModule):
         test_dataset=None,
         log_every=50,
         monitor_classes=None,
+        freezing_schedule: EncDecFreezingSchedule = None,
     ):
         super().__init__()
         self.model = model
@@ -82,6 +84,7 @@ class PointerModule(LightningModule):
         self.adam_eps = adam_eps
         self.log_every = log_every
         self.monitor_classes = monitor_classes
+        self.freezing_schedule = freezing_schedule
 
         self._collator = Seq2SeqDataCollator(
             pad_id=self.text_tokenizer.pad_token_id,
@@ -98,6 +101,9 @@ class PointerModule(LightningModule):
     def training_step(self, batch, batch_idx):
         outputs = self(**batch)
         loss = outputs[0]
+
+        if self.freezing_schedule is not None:
+            self._freezer_step()
 
         if self.log_every == 0 or (self.global_step % self.log_every != 0):
             return {"loss": loss, "log": {"loss": loss}}
@@ -123,12 +129,18 @@ class PointerModule(LightningModule):
             pred_tokens, true_tokens, self.monitor_classes, "train_batch"
         )
 
+        if self.model.config.move_norm is not None:
+            batch_metrics["move_norm"] = self.model.get_move_norm()
+
         log_dict = {"loss": loss, **batch_metrics, **tree_metrics}
         log_dict = {k: self._maybe_torchify(v) for k, v in log_dict.items()}
 
         return {"loss": loss, "aggregate_log": log_dict}
 
     def training_epoch_end(self, outputs):
+        if isinstance(self.train_dataset, SampleConcatSubset):
+            self.train_dataset.resample()
+
         # extract log_dict from outputs and ignore the outputs from no-log iterations
         aggregate_output = [x["aggregate_log"] for x in outputs if ("aggregate_log" in x)]
         if len(aggregate_output) == 0:
@@ -141,13 +153,15 @@ class PointerModule(LightningModule):
         return {"log": avg_log}
 
     def configure_optimizers(self):
-        optimizer, scheduler = get_optimizers(
+        optimizer = opt.get_optimizers(
             model=self.model,
             learning_rate=self.lr,
-            warmup_steps=self.warmup_steps,
-            num_frozen_encoder_steps=self.num_frozen_encoder_steps,
             weight_decay=self.weight_decay,
             adam_eps=self.adam_eps,
+        )
+
+        scheduler = opt.get_noam_schedule(
+            optimizer, self.warmup_steps, self.model.decoder.config.hidden_size,
         )
 
         # to call scheduler every step instead of every epoch
@@ -167,7 +181,7 @@ class PointerModule(LightningModule):
 
     # --- Validation
 
-    def validation_step(self, batch, batch_idx):
+    def validation_step(self, batch, batch_idx, prefix="eval"):
         prediction_batch: torch.LongTensor = self.model.generate(
             input_ids=batch["input_ids"].to(self.device),
             pointer_mask=batch["pointer_mask"].to(self.device),
@@ -202,11 +216,11 @@ class PointerModule(LightningModule):
         true_tokens = [self.schema_tokenizer.decode(t, return_tokens=True) for t in target_ids]
 
         tree_metrics = get_tree_path_metrics(
-            pred_tokens, true_tokens, self.monitor_classes, "eval"
+            pred_tokens, true_tokens, self.monitor_classes, prefix
         )
 
         log_dict = {
-            "eval_exact_match": exact_match,
+            f"{prefix}_exact_match": exact_match,
             **tree_metrics,
         }
 
@@ -227,7 +241,37 @@ class PointerModule(LightningModule):
         )
         return loader
 
+    # --- testing
+
+    def test_dataloader(self):
+        if self.test_dataset is None:
+            raise RuntimeError(".test_dataloader invoked for the model without test_dataset")
+
+        loader = DataLoader(
+            self.test_dataset,
+            batch_size=self.batch_size,
+            num_workers=8,
+            pin_memory=True,
+            collate_fn=self._collator.collate_batch,
+        )
+        return loader
+
+    def test_step(self, batch, batch_idx):
+        return self.validation_step(batch, batch_idx, prefix="test")
+
+    def test_epoch_end(self, outputs):
+        avg_log = self._average_logs(outputs)
+        return {"test_metrics": avg_log}
+
     # --- Internal
+
+    def cuda(self, device=None):
+        if self.model.config.move_norm is not None:
+            self.model.initial_params = {
+                k: p.to(device) for k, p in self.model.initial_params.items()
+            }
+
+        return super(PointerModule, self).cuda(device)
 
     @staticmethod
     def _average_logs(logs):
@@ -243,3 +287,30 @@ class PointerModule(LightningModule):
         if isinstance(x, torch.Tensor):
             return x
         return torch.tensor(x, dtype=self.dtype, device=self.device)
+
+    def _freezer_step(self):
+        step = self.global_step
+
+        act = self.freezing_schedule.freeze_encoder
+        if act is not None and step == act:
+            self.model.freeze_encoder(freeze=True)
+
+        act = self.freezing_schedule.unfreeze_encoder
+        if act is not None and step == act:
+            self.model.freeze_encoder(freeze=False)
+
+        act = self.freezing_schedule.freeze_decoder
+        if act is not None and step == act:
+            self.model.freeze_decoder(freeze=True)
+
+        act = self.freezing_schedule.unfreeze_decoder
+        if act is not None and step == act:
+            self.model.freeze_decoder(freeze=False)
+
+        act = self.freezing_schedule.freeze_head
+        if act is not None and step == act:
+            self.model.freeze_head(freeze=True, ignore_ids=self.freezing_schedule.ignore_ids)
+
+        act = self.freezing_schedule.unfreeze_head
+        if act is not None and step == act:
+            self.model.freeze_head(freeze=False, ignore_ids=self.freezing_schedule.ignore_ids)

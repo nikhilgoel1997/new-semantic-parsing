@@ -34,7 +34,14 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
     base_model_prefix = "encoder_decoder_wpointer"
 
     def __init__(
-        self, config=None, encoder=None, decoder=None, max_src_len=None, model_args=None, **kwargs,
+        self,
+        config=None,
+        encoder=None,
+        decoder=None,
+        max_src_len=None,
+        dropout=None,
+        model_args=None,
+        **kwargs,
     ):
         """Initialize the model either from config or from encoder and decoder models.
 
@@ -54,6 +61,7 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
                 encoder=encoder.config.to_dict(),
                 decoder=decoder.config.to_dict(),
                 max_src_len=max_src_len,
+                dropout=dropout,
                 model_args=model_args,
                 **kwargs,
             )
@@ -86,17 +94,13 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
 
         # this gives a schema vocab size (without pointer embeddings)
         self.output_vocab_size = self.decoder.config.vocab_size - self.config.max_src_len
-        if self.config.decoder_head_type == "ffn":
-            head_config = deepcopy(self.decoder.config)
-            head_config.vocab_size = self.output_vocab_size
 
-            # Linear -> activation -> LayerNorm -> Linear
-            # from config only .hidden_size, .hidden_act, .layer_norm_eps and .vocab_size are used
-            self.lm_head = transformers.modeling_bert.BertLMPredictionHead(head_config)
-        elif self.config.decoder_head_type == "linear":
-            self.lm_head = nn.Linear(decoder.config.hidden_size, self.output_vocab_size)
-        else:
-            raise ValueError(model_args.decoder_head_type)
+        head_config = deepcopy(self.decoder.config)
+        head_config.vocab_size = self.output_vocab_size
+
+        # Linear -> activation -> LayerNorm -> Linear
+        # from config only .hidden_size, .hidden_act, .layer_norm_eps and .vocab_size are used
+        self.lm_head = transformers.modeling_bert.BertLMPredictionHead(head_config)
 
         # One does not simply ties weights of embeddings with different vocabularies
         # # lm_head.decoder is just a linear layer
@@ -117,6 +121,18 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
             self.label_smoothing_loss_layer = LabelSmoothedCrossEntropy(
                 eps=self.config.label_smoothing
             )
+
+        self.initial_params = None
+        if self.config.move_norm is not None:
+            self.reset_move_norm()  # set initial_params
+
+    def to(self, *args, **kwargs):
+        if hasattr(self, "initial_params") and self.initial_params is not None:
+            self.initial_params = {
+                n: p.to(*args, **kwargs) for n, p in self.initial_params.items()
+            }
+
+        return super(EncoderDecoderWPointerModel, self).to(*args, **kwargs)
 
     def tie_weights(self):
         # for now no weights tying
@@ -223,8 +239,8 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
         decoder_heads=None,
         encoder_pad_token_id=0,
         decoder_pad_token_id=None,
-        hidden_dropout_prob=0.1,
-        attention_probs_dropout_prob=0.1,
+        dropout=0,
+        move_norm=None,
         model_args=None,
     ):
         """
@@ -243,8 +259,8 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
             vocab_size=src_vocab_size,
             num_hidden_layers=layers,
             num_attention_heads=heads,
-            hidden_dropout_prob=hidden_dropout_prob,
-            attention_probs_dropout_prob=attention_probs_dropout_prob,
+            hidden_dropout_prob=dropout,
+            attention_probs_dropout_prob=dropout,
             pad_token_id=encoder_pad_token_id,
         )
         encoder = transformers.BertModel(encoder_config)
@@ -261,14 +277,19 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
             is_decoder=True,
             num_hidden_layers=decoder_layers,
             num_attention_heads=decoder_heads,
-            hidden_dropout_prob=hidden_dropout_prob,
-            attention_probs_dropout_prob=attention_probs_dropout_prob,
+            hidden_dropout_prob=dropout,
+            attention_probs_dropout_prob=dropout,
             pad_token_id=decoder_pad_token_id,
         )
         decoder = transformers.BertModel(decoder_config)
 
         return cls(
-            encoder=encoder, decoder=decoder, max_src_len=max_src_len, model_args=model_args,
+            encoder=encoder,
+            decoder=decoder,
+            max_src_len=max_src_len,
+            model_args=model_args,
+            move_norm=move_norm,
+            dropout=dropout,
         )
 
     def forward(
@@ -361,6 +382,9 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
 
         # NOTE: this implementaion is computationally inefficient during inference
         attention_scores = query @ keys.transpose(1, 2)  # (bs, tgt_len, src_len)
+        attention_scores = F.dropout(
+            attention_scores, p=self.config.dropout, training=self.training
+        )
 
         # mask becomes 0 for all 1 (keep) positions and -1e4 in all 0 (mask) positions
         # NOTE: we can use this mask to additionaly guide the model
@@ -379,6 +403,9 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
         assert attention_scores.shape == attention_scores_shape, "attention scores changed shape"
 
         # NOTE: maybe add some kind of normalization between dec_logits?
+        decoder_hidden_states = F.dropout(
+            decoder_hidden_states, p=self.config.dropout, training=self.training
+        )
         decoder_logits = self.lm_head(decoder_hidden_states)  # (bs, tgt_len, tgt_vocab_size)
         combined_logits = torch.cat([decoder_logits, attention_scores], dim=-1)
 
@@ -395,11 +422,16 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
             mask = mask.view(-1)
 
         if self.label_smoothing_loss_layer is None:
-            return F.cross_entropy(
+            loss = F.cross_entropy(
                 input, target, ignore_index=self.decoder.embeddings.word_embeddings.padding_idx,
             )
+        else:
+            loss = self.label_smoothing_loss_layer(input, target, mask)
 
-        return self.label_smoothing_loss_layer(input, target, mask)
+        if self.config.move_norm is not None:
+            loss += self.config.move_norm * self.get_move_norm()
+
+        return loss
 
     def _get_pointer_attention_mask(
         self, pointer_attention_mask=None, batch_size=None, device=None, dtype=None
@@ -425,3 +457,43 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
 
     def _reorder_cache(self, past, beam_idx):
         return past
+
+    def freeze_encoder(self, freeze=True):
+        value = not freeze
+
+        for param in self.encoder.parameters():
+            param.requires_grad = value
+
+    def freeze_decoder(self, freeze=True):
+        value = not freeze
+
+        for param in self.decoder.parameters():
+            param.requires_grad = value
+
+        if self.enc_dec_proj is None:
+            return
+
+        for param in self.enc_dec_proj.parameters():
+            param.requires_grad = value
+
+    def freeze_head(self, freeze=True):
+        value = not freeze
+
+        for param in self.decoder_q_proj.parameters():
+            param.requires_grad = value
+
+        for name, param in self.lm_head.named_parameters():
+            param.requires_grad = value
+
+    def get_move_norm(self):
+        norm = 0
+
+        for n, p1 in self.named_parameters():
+            p2 = self.initial_params[n]
+            norm += torch.dist(p1, p2, p=2)
+
+        norm /= len(self.initial_params)
+        return norm
+
+    def reset_move_norm(self):
+        self.initial_params = {n: p.detach().clone() for n, p in self.named_parameters()}

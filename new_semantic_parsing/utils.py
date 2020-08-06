@@ -114,6 +114,8 @@ def get_model_type(model_name):
 
 
 def iterative_prediction(model, dataloader, schema_tokenizer, max_len, num_beams, device="cpu"):
+    model = model.to(device)
+
     predictions_ids = []
     predictions_str = []
     text_tokenizer = schema_tokenizer.src_tokenizer
@@ -142,3 +144,81 @@ def iterative_prediction(model, dataloader, schema_tokenizer, max_len, num_beams
             predictions_str.append(prediction_str)
 
     return predictions_ids, predictions_str
+
+
+def make_subset(dataset, subset_size):
+    """Make torch Subset by randomly sampling indices from dataset
+
+    Args:
+        dataset: torch Dataset
+        subset_size: float, 0 < subset_size < 1
+    """
+    if subset_size == 1:
+        return dataset
+
+    if not (0 < subset_size < 1):
+        raise ValueError(subset_size)
+
+    _subset_size = int(subset_size * len(dataset))
+    _subset_ids = np.random.permutation(len(dataset))[:_subset_size]
+
+    _subset = torch.utils.data.Subset(dataset, indices=_subset_ids)
+    return _subset
+
+
+def get_required_example_ids(schema_vocab, train_data):
+    """Find a subset of train_data that contains all schema_vocab tokens.
+    
+    Args:
+        schema_vocab: set of str, required schema tokens
+        train_data: pd.DataFrame with field "schema"
+
+    Returns:
+        a set of train_data ids
+    """
+    required_schema_vocab = set()
+    required_example_ids = set()
+
+    for i, row in train_data.iterrows():
+        add_this = False
+        tokens_not_present = schema_vocab.difference(required_schema_vocab)
+        
+        # Add the example id to required_example_ids if the example
+        # contains a schema token not present in the required_schema_vocab
+        for token in tokens_not_present:
+            if token in row.schema:
+                add_this = True
+                required_schema_vocab.add(token)
+
+        if add_this:
+            required_example_ids.add(i)
+
+        if required_schema_vocab == schema_vocab:
+            break
+    else:
+        raise RuntimeError("Full vocabulary was not found in the training set")
+
+    return required_example_ids
+
+
+def check_config(pointer_module, trainer, args, strict=False):
+    """Check that both module and trainer comply with args"""
+    _cfg = pointer_module.model.config
+    if args.dropout is not None:
+        assert _cfg.dropout == args.dropout
+        assert _cfg.encoder.hidden_dropout_prob == args.dropout
+        assert _cfg.decoder.hidden_dropout_prob == args.dropout
+        assert _cfg.encoder.attention_probs_dropout_prob == args.dropout
+        assert _cfg.decoder.attention_probs_dropout_prob == args.dropout
+
+    if getattr(args, "move_norm", None) is not None or strict:
+        assert _cfg.move_norm == args.move_norm
+
+    if args.label_smoothing is not None:
+        assert _cfg.label_smoothing == args.label_smoothing
+
+    if args.weight_decay is not None and (trainer.optimizers is not None or strict):
+        for param_group in trainer.optimizers[0].param_groups:
+            if not param_group["use_weight_decay"]:
+                continue
+            assert param_group["weight_decay"] == args.weight_decay

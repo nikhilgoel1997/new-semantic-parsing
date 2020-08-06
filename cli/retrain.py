@@ -20,6 +20,7 @@ creating it and preprocesses the data.
 
 import os
 import sys
+import shutil
 import logging
 import argparse
 import tempfile
@@ -28,7 +29,6 @@ from os.path import join as path_join
 import toml
 import torch
 import transformers
-import numpy as np
 
 from pytorch_lightning import Trainer
 from pytorch_lightning import callbacks
@@ -38,9 +38,11 @@ from new_semantic_parsing import (
     EncoderDecoderWPointerModel,
     TopSchemaTokenizer,
 )
-from new_semantic_parsing import utils, SAVE_FORMAT_VERSION
-from new_semantic_parsing.data import PointerDataset, Seq2SeqDataCollator
+from new_semantic_parsing import utils, SAVE_FORMAT_VERSION, EncoderDecoderWPointerConfig
+from new_semantic_parsing.data import PointerDataset, Seq2SeqDataCollator, SampleConcatSubset
 from new_semantic_parsing.callbacks import TransformersModelCheckpoint
+from new_semantic_parsing.dataclasses import EncDecFreezingSchedule, SamplingMethods
+from new_semantic_parsing.optimization import get_optimizers, set_weight_decay
 from new_semantic_parsing.lightning_module import PointerModule
 
 
@@ -70,7 +72,11 @@ def parse_args(args=None):
     parser.add_argument('--new-classes-file', default=None,
                         help='path to a text file with names of classes to track, one class per line')
     parser.add_argument('--new-data-amount', default=1., type=float,
-                        help='amount of old data (train_dataset) to train on, 0 < amount <= 1')
+                        help='amount of new data (finetune_set) to train on, 0 < amount <= 1')
+    parser.add_argument('--old-data-amount', default=0., type=float,
+                        help='amount of old data (train_set) to train on, only values from {0, 1} are supported')
+    parser.add_argument('--old-data-sampling-method', default='merge_subset',
+                        help='how to sample from old data')
     parser.add_argument('--eval-data-amount', default=1., type=float,
                         help='amount of validation set to use when training. '
                              'The final evaluation will use the full dataset.')
@@ -85,6 +91,7 @@ def parse_args(args=None):
     parser.add_argument('--epochs', default=1, type=int)
     parser.add_argument('--early-stopping', default=None, type=int,
                         help='Early stopping patience. No early stopping by default.')
+    parser.add_argument('--min-epochs', default=1, type=int)
     parser.add_argument('--seed', default=1, type=int)
     parser.add_argument('--lr', default=None, type=float,
                         help='By default, checkpoint lr is used.')
@@ -93,23 +100,41 @@ def parse_args(args=None):
     parser.add_argument('--decoder-lr', default=None, type=float,
                         help='Decoder learning rate, overrides --lr')
     parser.add_argument('--weight-decay', default=None, type=float)
+    parser.add_argument('--move-norm', default=None, type=float,
+                        help='regularization coefficient for the distance between the initial and current network')
     parser.add_argument('--dropout', default=None, type=float,
                         help='dropout amount for the encoder and decoder, by defalut checkpoint value is used')
     parser.add_argument('--warmup-steps', default=None, type=int)
     parser.add_argument('--gradient-accumulation-steps', default=1, type=int)
     parser.add_argument('--batch-size', default=None, type=int)
     parser.add_argument('--max-grad-norm', default=1.0, type=float)
-    parser.add_argument('--num-frozen-encoder-steps', default=None, type=int,
-                        help='number of steps with encoder weights not being updated')
     parser.add_argument('--label-smoothing', default=None, type=float)
+    parser.add_argument('--no-opt-state', default=False, action='store_true')
+
+    # --- freezing
+    parser.add_argument('--freeze-encoder', default=None, type=int,
+                        help='step to freeze encoder')
+    parser.add_argument('--unfreeze-encoder', default=None, type=int,
+                        help='step to unfreeze encoder')
+    parser.add_argument('--freeze-decoder', default=None, type=int,
+                        help='step to freeze decoder')
+    parser.add_argument('--unfreeze-decoder', default=None, type=int,
+                        help='step to unfreeze decoder')
+    parser.add_argument('--freeze-head', default=None, type=int,
+                        help='step to freeze head')
+    parser.add_argument('--unfreeze-head', default=None, type=int,
+                        help='step to unfreeze head')
 
     # misc
     parser.add_argument('--wandb-project', default=None)
     parser.add_argument('--log-every', default=None, type=int)
-    parser.add_argument('--tag', default=None)
+    parser.add_argument('--tags', default=None)
     parser.add_argument('--fp16', default=False, action='store_true')
     parser.add_argument('--gpus', default=None, type=int,
                         help='Number of gpus to train the model on')
+    parser.add_argument('--clean-output', default=False, action='store_true')
+    parser.add_argument('--split-amount-finetune', default=None, type=float,
+                        help='Only used for logging, amount of data that was removed from the training set')
 
     # fmt: on
 
@@ -124,7 +149,10 @@ def parse_args(args=None):
         args.lr = {"encoder_lr": args.encoder_lr, "decoder_lr": args.decoder_lr}
 
     args.wandb_project = args.wandb_project or "new_semantic_parsing"
-    args.tag = [args.tag] if args.tag else []  # list is required by wandb interface
+    args.tags = args.tags.split(",") if args.tags else []  # list is required by wandb interface
+
+    if args.split_amount_finetune is not None:
+        args.split_amount_train = 1.0 - args.split_amount_finetune
 
     if args.gpus is None:
         args.gpus = 1 if torch.cuda.is_available() else 0
@@ -133,7 +161,13 @@ def parse_args(args=None):
         args.output_dir = os.path.join("output_dir", next(tempfile._get_candidate_names()))
 
     if not (0 < args.new_data_amount <= 1):
-        raise ValueError(f"--new-data-amount should be between 0 and 1")
+        raise ValueError(f"--new-data-amount should be between 0 and 1 (exclusive)")
+
+    if not (0 <= args.old_data_amount <= 1):
+        raise ValueError(f"--old-data-amount should be between 0 and 1 (inclusive)")
+
+    if not hasattr(SamplingMethods, args.old_data_sampling_method):
+        raise ValueError(args.old_data_sampling_method)
 
     return args
 
@@ -141,7 +175,7 @@ def parse_args(args=None):
 def main(args):
     utils.set_seed(args.seed)
 
-    wandb_logger = WandbLogger(project=args.wandb_project, tags=args.tag)
+    wandb_logger = WandbLogger(project=args.wandb_project, tags=args.tags)
     wandb_logger.log_hyperparams(args)
 
     if os.path.exists(args.output_dir):
@@ -186,7 +220,16 @@ def main(args):
 
     logger.info("Creating a model")
 
-    model = EncoderDecoderWPointerModel.from_pretrained(args.model_dir)
+    model_config = EncoderDecoderWPointerConfig.from_pretrained(args.model_dir)
+    if args.dropout is not None:
+        model_config.set_dropout(args.dropout)
+    if args.move_norm is not None:
+        model_config.move_norm = args.move_norm
+    if args.label_smoothing is not None:
+        model_config.label_smoothing = args.label_smoothing
+
+    model = EncoderDecoderWPointerModel.from_pretrained(args.model_dir, config=model_config)
+    model.reset_move_norm()
 
     new_classes = None
     if args.new_classes_file is not None:
@@ -198,9 +241,22 @@ def main(args):
 
     train_subset = train_dataset
     if args.new_data_amount is not None and args.new_data_amount < 1.0:
-        train_subset_size = int(args.new_data_amount * len(train_dataset))
-        train_subset_ids = np.random.permutation(len(train_dataset))[:train_subset_size]
-        train_subset = torch.utils.data.Subset(train_dataset, indices=train_subset_ids)
+        train_subset = utils.make_subset(train_subset, args.new_data_amount)
+
+    wandb_logger.log_hyperparams({"num_new_data": len(train_subset)})
+
+    if args.old_data_amount > 0:
+        if args.old_data_sampling_method == SamplingMethods.merge_subset:
+            old_data_subset = utils.make_subset(datasets["train_dataset"], args.old_data_amount)
+            train_subset = torch.utils.data.ConcatDataset([train_subset, old_data_subset])
+        elif args.old_data_sampling_method == SamplingMethods.sample:
+            train_subset = SampleConcatSubset(
+                train_subset, datasets["train_dataset"], args.old_data_amount
+            )
+        else:
+            raise ValueError(args.old_data_sampling_method)
+
+    wandb_logger.log_hyperparams({"num_total_data": len(train_subset)})
 
     # Lightning loads all params which are not specified in .load_from_checkpoint
     # thus, some arguments are only provided if we want to override the loaded values
@@ -212,6 +268,9 @@ def main(args):
     }
     module_kwargs = {k: v for k, v in module_kwargs.items() if v is not None}
 
+    # always overwrite freezing schedule because global_step starts from zero
+    module_kwargs["freezing_schedule"] = EncDecFreezingSchedule.from_args(args)
+
     lightning_module = PointerModule.load_from_checkpoint(
         train_args["pl_checkpoint_path"],
         model=model,
@@ -222,11 +281,11 @@ def main(args):
         **module_kwargs,
     )
 
-    wandb_logger.watch(lightning_module, log="all", log_freq=lightning_module.log_every)
-
     # there is a werid bug (feature?) that checkpoint_callback creates checkpoints
     # in the filepath subfolder, e.g. if you specify filepath=output_dir
     # the checkpoints will be created in output_dir/..
+    # NOTE: we need save_top_k=1 fot checkpoint_callback.last_checkpoint_path
+    # to point to the best model
     checkpoint_callback = TransformersModelCheckpoint(
         filepath=path_join(args.output_dir, "pl_checkpoint.ckpt"),
         save_top_k=1,
@@ -252,14 +311,28 @@ def main(args):
         "gradient_clip_val": args.max_grad_norm,
         "gpus": args.gpus,
         "accumulate_grad_batches": args.gradient_accumulation_steps,
+        "reload_dataloaders_every_epoch": args.old_data_sampling_method == SamplingMethods.sample,
     }
     trainer_kwargs = {k: v for k, v in trainer_kwargs.items() if v is not None}
 
     # A trick to start training from the global_step=0
     # when still getting optimizer state and scheduler state restored
     checkpoint = torch.load(train_args["pl_checkpoint_path"])
-    checkpoint["global_step"] = 0
-    checkpoint["epoch"] = 0
+
+    if args.no_opt_state:
+        optimizer = get_optimizers(
+            model, lightning_module.lr, lightning_module.weight_decay, lightning_module.adam_eps
+        )
+        checkpoint["optimizer_states"] = [optimizer.state_dict()]
+
+    # global_step will be incremented in .test call
+    # -1 is used to get metrics before the training
+    checkpoint["global_step"] = -1
+    checkpoint["epoch"] = -1
+
+    if args.weight_decay is not None:
+        # PointerModule has a single optimizer
+        set_weight_decay(checkpoint["optimizer_states"][0]["param_groups"], args.weight_decay)
 
     initial_checkpoint_path = path_join(args.output_dir, "initial_checkpoint.pl")
     torch.save(checkpoint, initial_checkpoint_path)
@@ -274,13 +347,36 @@ def main(args):
         callbacks=[lr_logger],
         row_log_interval=1,
         limit_val_batches=args.eval_data_amount,
+        min_epochs=args.min_epochs,
         **trainer_kwargs,
     )
 
+    # evaluate the model before training
+    out = trainer.test(lightning_module, lightning_module.val_dataloader())
+    out = {"eval" + k.lstrip("test"): v for k, v in out["test_metrics"].items()}
+    out["epoch"] = -1
+    out["global_step"] = -1
+    wandb_logger.log_metrics(out)
+
+    wandb_logger.watch(lightning_module, log="all", log_freq=lightning_module.log_every)
+
+    # --- FIT
+    utils.check_config(lightning_module, trainer, args, strict=True)
+    if model.config.move_norm is not None:
+        assert torch.allclose(model.get_move_norm(), torch.zeros(1, device=model.device))
+
     trainer.fit(lightning_module)
 
-    model = EncoderDecoderWPointerModel.from_pretrained(args.output_dir)
-    model = model.to(lightning_module.device)
+    utils.check_config(lightning_module, trainer, args, strict=True)
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # top_k == 1 --> the last checkpoint is the best model
+    assert checkpoint_callback.save_top_k == 1
+    best_model_dir = os.path.dirname(checkpoint_callback.last_checkpoint_path)
+    model = EncoderDecoderWPointerModel.from_pretrained(best_model_dir)
+    model = model.to(device)
+    model.eval()
 
     # \/ \/ copy of the train.py
 
@@ -304,7 +400,7 @@ def main(args):
         schema_tokenizer=schema_tokenizer,
         max_len=63,
         num_beams=1,
-        device="cuda" if torch.cuda.is_available() else "cpu",
+        device=device,
     )
 
     logger.info("Computing evaluation metrics on full dataset")
@@ -316,8 +412,11 @@ def main(args):
     ) / len(eval_dataset)
 
     logger.info(f"Exact match (ids): {exact_match_ids}")
-    wandb_logger.log_metrics({"eval_exact_match": exact_match_ids})
+    wandb_logger._experiment.summary["best_eval_exact_match"] = exact_match_ids
     wandb_logger.close()
+
+    if args.clean_output:
+        shutil.rmtree(args.output_dir)
 
 
 if __name__ == "__main__":

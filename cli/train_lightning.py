@@ -42,6 +42,7 @@ from new_semantic_parsing import (
 from new_semantic_parsing import utils, SAVE_FORMAT_VERSION
 from new_semantic_parsing.data import PointerDataset, Seq2SeqDataCollator
 from new_semantic_parsing.callbacks import TransformersModelCheckpoint
+from new_semantic_parsing.dataclasses import EncDecFreezingSchedule
 from new_semantic_parsing.lightning_module import PointerModule
 
 
@@ -98,13 +99,12 @@ def parse_args(args=None):
     # model architecture changes
     parser.add_argument('--use-pointer-bias', default=False, action='store_true',
                         help='Use bias in pointer network')
-    parser.add_argument('--decoder-head-type', default='ffn', choices=['ffn', 'linear'],
-                        help='Type of network used to make logits from the last decoder state')
 
     # training
     parser.add_argument('--epochs', default=1, type=int)
     parser.add_argument('--early-stopping', default=None, type=int,
                         help='Lightning-only. Early stopping patience. No early stopping by default.')
+    parser.add_argument('--min-epochs', default=1, type=int)
     parser.add_argument('--seed', default=1, type=int)
     parser.add_argument('--lr', default=None, type=float,
                         help='By default, lr is chosen according to the Scaling Laws for Neural Language Models')
@@ -114,22 +114,36 @@ def parse_args(args=None):
                         help='Decoder learning rate, overrides --lr')
     parser.add_argument('--weight-decay', default=0, type=float)
     parser.add_argument('--dropout', default=0.1, type=float,
-                        help='dropout amount for the encoder and decoder, default value 0.1 is from Transformers')
+                        help='dropout amount for the encoder, decoder and head, default value 0.1 is from Transformers')
     parser.add_argument('--warmup-steps', default=1, type=int)
     parser.add_argument('--gradient-accumulation-steps', default=1, type=int)
     parser.add_argument('--batch-size', default=64, type=int)
     parser.add_argument('--max-grad-norm', default=1.0, type=float)
-    parser.add_argument('--num-frozen-encoder-steps', default=0, type=int,
-                        help='number of steps with encoder weights not being updated')
     parser.add_argument('--label-smoothing', default=0.1, type=float)
+
+    # --- freezing
+    parser.add_argument('--freeze-encoder', default=None, type=int,
+                        help='step to freeze encoder')
+    parser.add_argument('--unfreeze-encoder', default=None, type=int,
+                        help='step to unfreeze encoder')
+    parser.add_argument('--freeze-decoder', default=None, type=int,
+                        help='step to freeze decoder')
+    parser.add_argument('--unfreeze-decoder', default=None, type=int,
+                        help='step to unfreeze decoder')
+    parser.add_argument('--freeze-head', default=None, type=int,
+                        help='step to freeze head')
+    parser.add_argument('--unfreeze-head', default=None, type=int,
+                        help='step to unfreeze head')
 
     # misc
     parser.add_argument('--wandb-project', default=None)
     parser.add_argument('--log-every', default=100, type=int)
-    parser.add_argument('--tag', default=None)
+    parser.add_argument('--tags', default=None)
     parser.add_argument('--fp16', default=False, action='store_true')
     parser.add_argument('--gpus', default=None, type=int,
                         help='Lightning-only. Number of gpus to train the model on')
+    parser.add_argument('--split-amount-finetune', default=None, type=float,
+                        help='Only used for logging, amount of data that was removed from the training set')
 
     # fmt: on
 
@@ -143,7 +157,10 @@ def parse_args(args=None):
     args.decoder_hidden = args.decoder_hidden or args.hidden
     args.decoder_heads = args.decoder_heads or args.heads
     args.wandb_project = args.wandb_project or "new_semantic_parsing"
-    args.tag = [args.tag] if args.tag else []  # list is required by wandb interface
+    args.tags = args.tags.split(",") if args.tags else []  # list is required by wandb interface
+
+    if args.split_amount_finetune is not None:
+        args.split_amount_train = 1.0 - args.split_amount_finetune
 
     if args.gpus is None:
         args.gpus = 1 if torch.cuda.is_available() else 0
@@ -157,7 +174,7 @@ def parse_args(args=None):
 def main(args):
     utils.set_seed(args.seed)
 
-    wandb_logger = WandbLogger(project=args.wandb_project, tags=args.tag)
+    wandb_logger = WandbLogger(project=args.wandb_project, tags=args.tags)
     wandb_logger.log_hyperparams(args)
 
     if os.path.exists(args.output_dir):
@@ -223,7 +240,11 @@ def main(args):
         decoder = transformers.BertModel(decoder_config)
 
         model = EncoderDecoderWPointerModel(
-            encoder=encoder, decoder=decoder, max_src_len=max_src_len, model_args=args,
+            encoder=encoder,
+            decoder=decoder,
+            max_src_len=max_src_len,
+            dropout=args.dropout,
+            model_args=args,
         )
 
     else:  # if args.encoder_model is not specified
@@ -239,8 +260,7 @@ def main(args):
             encoder_pad_token_id=text_tokenizer.pad_token_id,
             decoder_pad_token_id=schema_tokenizer.pad_token_id,
             max_src_len=max_src_len,
-            hidden_dropout_prob=args.dropout,
-            attention_probs_dropout_prob=args.dropout,
+            dropout=args.dropout,
             model_args=args,
         )
 
@@ -258,6 +278,10 @@ def main(args):
 
     adam_eps = 1e-7 if args.fp16 else 1e-9
 
+    freezing_schedule = EncDecFreezingSchedule.from_args(args)
+
+    wandb_logger.log_hyperparams({"num_data": len(train_dataset)})
+
     lightning_module = PointerModule(
         model=model,
         schema_tokenizer=schema_tokenizer,
@@ -268,9 +292,9 @@ def main(args):
         warmup_steps=args.warmup_steps,
         weight_decay=args.weight_decay,
         adam_eps=adam_eps,
-        num_frozen_encoder_steps=args.num_frozen_encoder_steps,
         log_every=args.log_every,
         monitor_classes=new_classes,
+        freezing_schedule=freezing_schedule,
     )
 
     wandb_logger.watch(lightning_module, log="all", log_freq=args.log_every)
@@ -278,6 +302,8 @@ def main(args):
     # there is a werid bug that checkpoint_callback creates checkpoints
     # in the filepath subfolder, e.g. if you specify filepath=output_dir
     # the checkpoints will be created in output_dir/..
+    # NOTE: we need save_top_k=1 fot checkpoint_callback.last_checkpoint_path
+    # to point to the best model
     checkpoint_callback = TransformersModelCheckpoint(
         filepath=path_join(args.output_dir, "pl_checkpoint.ckpt"),
         save_top_k=1,
@@ -311,12 +337,21 @@ def main(args):
         row_log_interval=args.log_every,
         limit_val_batches=args.eval_data_amount,
         callbacks=[lr_logger],
+        min_epochs=args.min_epochs,
     )
+
+    # --- FIT
+    utils.check_config(lightning_module, trainer, args)
 
     trainer.fit(lightning_module)
 
-    model = EncoderDecoderWPointerModel.from_pretrained(args.output_dir)
-    model = model.to(lightning_module.device)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # top_k == 1 --> the last checkpoint is the best model
+    assert checkpoint_callback.save_top_k == 1
+    best_model_dir = os.path.dirname(checkpoint_callback.last_checkpoint_path)
+    model = EncoderDecoderWPointerModel.from_pretrained(best_model_dir)
+    model = model.to(device)
 
     with open(path_join(args.output_dir, "args.toml"), "w") as f:
         args_dict = {
@@ -342,7 +377,7 @@ def main(args):
         schema_tokenizer=schema_tokenizer,
         max_len=63,
         num_beams=1,
-        device="cuda" if torch.cuda.is_available() else "cpu",
+        device=device,
     )
 
     # Finish the script if evaluation texts are not available
@@ -366,7 +401,7 @@ def main(args):
     ) / len(targets_str)
     logger.info(f"Exact match (ids): {exact_match_ids}")
 
-    wandb_logger.log_metrics({"eval_exact_match": exact_match_ids})
+    wandb_logger._experiment.summary["best_eval_exact_match"] = exact_match_ids
 
     logger.info("Checking for mismatches between ids and str")
 

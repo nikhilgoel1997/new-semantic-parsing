@@ -16,11 +16,12 @@
 import numpy as np
 import pandas as pd
 import torch
+import torch.utils.data
 from tqdm.auto import tqdm
 
 from new_semantic_parsing.schema_tokenizer import TopSchemaTokenizer
 from new_semantic_parsing.dataclasses import InputDataClass, List, Tensor, PairItem
-from new_semantic_parsing.utils import get_src_pointer_mask
+from new_semantic_parsing.utils import get_src_pointer_mask, make_subset
 
 
 class PointerDataset(torch.utils.data.Dataset):
@@ -245,3 +246,47 @@ def make_test_dataset(filepath, schema_tokenizer: TopSchemaTokenizer, max_len=No
     dataset.torchify()
 
     return dataset
+
+
+class SampleConcatSubset(torch.utils.data.Dataset):
+    def __init__(self, concat_dataset, sample_dataset, sample_probability):
+        """Concatenation of concat_dataset and a subset of sample_dataset.
+
+        The elements of the subset are sampled with sample_probability.
+
+        Args:
+            concat_dataset: torch Dataset
+            sample_dataset: torch Dataset
+            sample_probability: float, 0 < sample_probability < 1
+        """
+
+        self._concat_dataset = concat_dataset
+        self._sample_dataset = sample_dataset
+        self._sample_probability = sample_probability
+
+        self._data = None
+        self.resample()
+
+    def __len__(self):
+        if self._data is None:
+            raise RuntimeError("Call .resample first")
+        return len(self._data)
+
+    def resample(self, sample_probability=None):
+        """Resample from sample_dataset, inplace
+
+        Args:
+            sample_probability: optional, float, 0 < sample_probability < 1,
+                equal to self.sample_probability by default
+
+        Returns:
+            torch Dataset
+        """
+        sample_probability = sample_probability or self._sample_probability
+
+        subset = make_subset(self._sample_dataset, sample_probability)
+        self._data = torch.utils.data.ConcatDataset([self._concat_dataset, subset])
+        return self._data
+
+    def __getitem__(self, item):
+        return self._data[item]

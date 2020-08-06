@@ -14,6 +14,7 @@
 # =============================================================================
 """Data structures for more clear interfaces across the codebase."""
 
+from enum import Enum
 from typing import NewType, List, Union
 from dataclasses import dataclass
 
@@ -81,3 +82,30 @@ class Seq2SeqEvalPrediciton:
             masks = [m.numpy() for m in masks]
 
         return cls(logits, labels, masks)
+
+
+@dataclass
+class EncDecFreezingSchedule:
+    freeze_encoder: int = None
+    unfreeze_encoder: int = None
+    freeze_decoder: int = None
+    unfreeze_decoder: int = None
+    freeze_head: int = None
+    unfreeze_head: int = None
+    ignore_ids: List[int] = None
+
+    @classmethod
+    def from_args(cls, args):
+        return cls(
+            args.freeze_encoder,
+            args.unfreeze_encoder,
+            args.freeze_decoder,
+            args.unfreeze_decoder,
+            args.freeze_head,
+            args.unfreeze_head,
+        )
+
+
+class SamplingMethods:
+    merge_subset = "merge_subset"
+    sample = "sample"
