@@ -92,14 +92,14 @@ class Tree:
         return self._counts
 
     @classmethod
-    def from_tokens(cls, tokens, return_index=False):
+    def from_tokens(cls, tokens, return_index=False, inside_slot=False):
         """Builds a parsing tree for labeled bracketing score computation.
 
         The tree is build until the last ] symbol, everything after it is ignored
 
         Args:
             tokens: list of tokens
-            return_index: used in recursion to provide toke index
+            return_index: used in recursion to provide token index
 
         Returns:
             Tree object, if return_index == False
@@ -125,21 +125,29 @@ class Tree:
         slot_value_tokens = []
 
         i = 3
+        inside_slot = inside_slot or entity_type == SL
         while i < len(tokens):
             token = tokens[i]
 
             # ignore non-slot values
             # e.g. ignore "go stuff in" [IN:STUFF Do stuff]
-            if entity_type == IN and token not in [LBR, RBR]:
+            if not inside_slot and token not in [LBR, RBR]:
                 i += 1
                 continue
 
             # LBR starts a new subtree
             if token == LBR:
-                subtree, j = cls.from_tokens(tokens[i:], return_index=True)
+                subtree, j = cls.from_tokens(
+                    tokens[i:], return_index=True, inside_slot=inside_slot
+                )
+
+                if slot_value_tokens:
+                    subtrees.append(Tree(" ".join(slot_value_tokens)))
+                    slot_value_tokens = []
 
                 subtrees.append(subtree)
                 i += j
+
                 continue
 
             # RBR ends the tree, merge slot values into a single leaf if any
@@ -147,13 +155,14 @@ class Tree:
             if token == RBR:
                 if slot_value_tokens:
                     subtrees.append(Tree(" ".join(slot_value_tokens)))
+                    slot_value_tokens = []
+
                 i += 1
                 break
 
-            if entity_type == SL:
-                slot_value_tokens.append(token)
-                i += 1
-                continue
+            # if the token is not a special symbol and inside SL: bracket (probably, nested)
+            slot_value_tokens.append(token)
+            i += 1
 
         tree = Tree(entity, subtrees)
 
@@ -161,6 +170,15 @@ class Tree:
             return tree, i
 
         return tree
+
+    def to_tokens(self):
+        if not self.subtrees:
+            return self.entity
+
+        return f"[{self.entity} {self.subtrees_to_tokens()}]"
+
+    def subtrees_to_tokens(self):
+        return " ".join([s.to_tokens() for s in self.subtrees])
 
 
 # Main function
@@ -321,44 +339,34 @@ def get_tree_path_scores(pred_tokens, true_tokens, classes=None):
     }
 
 
-def _get_slot_paths(tree):
-    slot_paths = Counter()
+def _get_paths_with_values(tree) -> dict:
+    """Go over the tree and return all slot values with the slot names.
+
+    Slot names include paths to this slot. E.g. IN1.SL1: sl1_value.
+    Intents and slot without values have None as a value.
+
+    Args:
+        tree: Tree object
+    """
+    is_special = SL in tree.entity or IN in tree.entity
+    if not is_special:
+        return {}
+
+    if tree.subtrees is None:
+        return {tree.entity: None}
+
+    is_slot = SL in tree.entity
+    paths = {}
+
+    if is_slot:
+        paths[tree.entity] = tree.subtrees_to_tokens()
 
     for subtree in tree.subtrees:
-        is_slot = SL in subtree.entity
+        subpaths = _get_paths_with_values(subtree)
+        for path, value in subpaths.items():
+            paths[tree.entity + "." + path] = value
 
-        slot_name = subtree.entity[3:]
-
-        slot_subpaths = _get_slot_paths(subtree)
-
-        for slot_subname, freq in slot_subpaths.items():
-            if is_slot:
-                slot_paths[slot_name + "." + slot_subname] += 1
-            else:
-                slot_paths[slot_subname] += 1
-
-        if len(slot_subpaths) == 0 and is_slot:
-            slot_paths[slot_name] += 1
-
-    return slot_paths
-
-
-def _get_paths_with_values(tree):
-    slot_paths = dict()
-
-    for subtree in tree.subtrees:
-        slot_subpaths = _get_paths_with_values(subtree)
-
-        for slot_subname, value in slot_subpaths.items():
-            if value is None:
-                slot_paths[tree.entity] = slot_subname
-            else:
-                slot_paths[tree.entity + "." + slot_subname] = value
-
-    if len(tree.subtrees) == 0:
-        slot_paths = {tree.entity: None}
-
-    return slot_paths
+    return paths
 
 
 def _get_tree_path_matches(pred_tree_paths, true_tree_paths, classes=None):

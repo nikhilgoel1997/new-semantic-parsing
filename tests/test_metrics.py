@@ -7,50 +7,12 @@
 #     month   = "Oct"
 # }
 import unittest
-from collections import Counter
 
 from new_semantic_parsing import metrics
 from new_semantic_parsing.schema_tokenizer import TopSchemaTokenizer
 
 
 class TestMetrics(unittest.TestCase):
-    def test_get_slot_paths(self):
-        test_case_1 = {
-            "input": "[ IN:INTENT [ SL:SLOT1 [ SL:SLOT2 slot value ] ] ]",
-            "output": Counter(["SLOT1.SLOT2"]),
-        }
-
-        test_case_2 = {
-            "input": (
-                "[ IN:INTENT [ SL:SLOT1 [ SL:SLOT2 slot value ] ] [ SL:SLOT1 [ SL:SLOT2 slot"
-                " value]]]"
-            ),
-            "output": Counter({"SLOT1.SLOT2": 2}),
-        }
-
-        test_case_3 = {
-            "input": (
-                "[ IN:INTENT "
-                "[ IN:GET_SLOT"
-                "[ SL:SLOT1 "
-                "[ SL:SLOT2 slot value ] "
-                "[ SL:SLOT1 [ SL:SLOT2 slot value ] ] "
-                "[ SL:SLOT3 slot3value ]"
-                "] "
-                "]"
-                "]"
-            ),
-            "output": Counter({"SLOT1.SLOT2": 1, "SLOT1.SLOT1.SLOT2": 1, "SLOT1.SLOT3": 1}),
-        }
-
-        for i, test_case in enumerate([test_case_1, test_case_2, test_case_3]):
-            with self.subTest(i):
-                _tokens = TopSchemaTokenizer.tokenize(test_case["input"])
-                slot_paths = metrics._get_slot_paths(metrics.Tree.from_tokens(_tokens))
-                self.assertEqual(
-                    slot_paths, test_case["output"], msg=(test_case["input"], slot_paths)
-                )
-
     def test_get_paths_with_values(self):
         # example from TOP dataset arxiv.org/abs/1810.07942
         # fmt: off
@@ -69,15 +31,20 @@ class TestMetrics(unittest.TestCase):
                 "[SL:DATE_TIME_ARRIVAL right when it opens on Saturday ] "
             "]")
 
-        _output = {
+        _expected_paths = {
+            "IN:GET_ESTIMATED_DEPARTURE.SL:SOURCE": "[IN:GET_LOCATION_HOME [SL:CONTACT my] house]",
             "IN:GET_ESTIMATED_DEPARTURE.SL:SOURCE.IN:GET_LOCATION_HOME.SL:CONTACT": "my",
+            "IN:GET_ESTIMATED_DEPARTURE.SL:DESTINATION": "[IN:GET_LOCATION [SL:POINT_ON_MAP the Hamilton Mall]]",
             "IN:GET_ESTIMATED_DEPARTURE.SL:DESTINATION.IN:GET_LOCATION.SL:POINT_ON_MAP": "the Hamilton Mall",
             "IN:GET_ESTIMATED_DEPARTURE.SL:DATE_TIME_ARRIVAL": "right when it opens on Saturday",
         }
+
         # fmt: on
 
         tree = metrics.Tree.from_tokens(TopSchemaTokenizer.tokenize(_input))
-        self.assertEqual(metrics._get_paths_with_values(tree), _output)
+        _paths = metrics._get_paths_with_values(tree)
+
+        self.assertEqual(_paths, _expected_paths)
 
     def test_get_tree_path_scores(self):
         # example from TOP dataset arxiv.org/abs/1810.07942
@@ -144,9 +111,30 @@ class TestMetrics(unittest.TestCase):
             "]")
 
         expected3 = {
-            "tree_path_precision": 1/2.,
-            "tree_path_recall": 2/3.,
-            "tree_path_f1": 0.5714285714285715,
+            "tree_path_precision": 3/6.,
+            "tree_path_recall": 3/5.,
+            "tree_path_f1": 0.5455,
+        }
+
+        pred4 = (
+            "[IN:GET_ESTIMATED_DEPARTURE When should I leave "
+                "[SL:SOURCE "
+                    "[IN:GET_LOCATION_HOME "
+                        "[SL:CONTACT my ] house "
+                    "] "
+                "] to get to "
+                "[SL:DESTINATION "
+                    "[IN:GET_LOCATION "
+                        "[SL:POINT_ON_MAP the Hamilton Mall ] "
+                    "] "
+                "] "
+                "[SL:DATE_TIME_ARRIVAL wrong text ] "
+            "]")
+
+        expected4 = {
+            "tree_path_precision": 4/5.,
+            "tree_path_recall": 4/5.,
+            "tree_path_f1": 4/5,
         }
 
         # fmt: on
@@ -154,11 +142,12 @@ class TestMetrics(unittest.TestCase):
         true_tokens = TopSchemaTokenizer.tokenize(true)
 
         for i, (pred, expected) in enumerate(
-            zip([pred1, pred2, pred3], [expected1, expected2, expected3])
+            zip([pred1, pred2, pred3, pred4], [expected1, expected2, expected3, expected4])
         ):
             with self.subTest(i):
                 pred_tokens = TopSchemaTokenizer.tokenize(pred)
                 res = metrics.get_tree_path_scores([pred_tokens], [true_tokens])
+                res = {k: round(v, 4) for k, v in res.items()}
                 self.assertDictEqual(expected, res)
 
     def test_get_tree_path_scores_for_classes(self):
@@ -212,3 +201,35 @@ class TestMetrics(unittest.TestCase):
                 pred_tokens = TopSchemaTokenizer.tokenize(pred)
                 res = metrics.get_tree_path_scores([pred_tokens], [true_tokens], classes)
                 self.assertDictEqual(expected, res)
+
+    def test_build_tree(self):
+        # example from TOP dataset arxiv.org/abs/1810.07942
+        # fmt: off
+
+        schema = (
+            "[IN:GET_DISTANCE How far is "
+                "[SL:DESTINATION "
+                    "[IN:GET_RESTAURANT_LOCATION the "
+                        "[SL:FOOD_TYPE coffee] "
+                        "shop "
+                    "]"
+                "]"
+            "]")
+
+        expected_tree = {
+            'IN:GET_DISTANCE': [
+                {'SL:DESTINATION': [
+                    {'IN:GET_RESTAURANT_LOCATION': [
+                        {'the': []},
+                        {'SL:FOOD_TYPE': [{'coffee': []}]},
+                        {'shop': []}
+                    ]}
+                ]}
+            ]
+        }
+
+        # fmt: on
+
+        tree = metrics.Tree.from_tokens(TopSchemaTokenizer.tokenize(schema))
+
+        self.assertDictEqual(expected_tree, tree._dict_repr)
