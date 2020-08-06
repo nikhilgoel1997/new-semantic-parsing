@@ -79,6 +79,7 @@ def evaluate_model(
         schema_tokenizer,
         max_len=max_len,
         num_beams=num_beams,
+        device="cuda" if torch.cuda.is_available() else "cpu",
     )
 
     pred_tokens = [
