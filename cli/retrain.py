@@ -486,6 +486,8 @@ def main(args):
 
     # Compute RI and RD
     class_weights = eval_dataset.get_class_frequencies(schema_tokenizer)
+    class_weights = {f"cls/eval_{cls}_tree_path_f1": p for cls, p in class_weights.items()}
+
     finetuning_metrics = cli_utils.evaluate_finetuning_procedure(
         pretrain_metrics, final_metrics, class_weights
     )

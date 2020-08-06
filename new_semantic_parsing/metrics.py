@@ -21,6 +21,7 @@ from pprint import pformat
 from typing import List
 
 import torch
+import wandb
 
 
 LBR = "["
@@ -431,3 +432,79 @@ def compute_metrics_from_batch(predictions, labels, masks, stop_tokens):
         "exact_match": exact_match,
         "first_intent_precision": first_intent_precision,
     }
+
+
+# Metrics used to evaluate finetuning procedure
+
+
+def get_outliers_metrics(
+    metric_names, initial_metrics, final_metrics, prefix, suffix, metric_weights
+):
+    """Get aggregate metrics evaluating the change of initial and final performance.
+
+    Metrics are summed with metric_weights for relative metrics and without weights for absolute metrics.
+    E.g., if metric_names is a list of positive outliers, this function computes Relative Improvemen
+    and the total metric increase on these classes.
+
+    Args:
+        metric_names: list of metrics to compute change on
+        initial_metrics: dict metric_name:metric_value
+        final_metrics: dict metric_name:metric_value
+        prefix: string used for naming, see Returns
+        suffix: string used for naming, see Returns
+        metric_weights: weights used to aggregate relative change
+
+    Returns:
+        dict with keys
+            {prefix}_outliers
+            absolute_{suffix}
+            relative_{suffix}
+    """
+    table = wandb.Table(
+        columns=[
+            "metric_name",
+            "pretrain_mean",
+            "pretrain_stdev",
+            "final_mean",
+            "final_stdev",
+            "absolute_improvement",
+            "relative_improvement",
+        ]
+    )
+
+    abs_deltas = {}
+    rel_deltas = {}
+    digits = 4
+
+    for name in metric_names:
+        abs_delta = final_metrics["means"][name] - initial_metrics["means"][name]
+        rel_delta = abs_delta / max(initial_metrics["means"][name], 0.001)
+        abs_deltas[name] = abs_delta
+        rel_deltas[name] = rel_delta
+
+        table.add_data(
+            name,
+            round(initial_metrics["means"][name], digits),
+            round(initial_metrics["stdevs"][name + "_std"], digits),
+            round(final_metrics["means"][name], digits),
+            round(final_metrics["stdevs"][name + "_std"], digits),
+            round(abs_delta, digits),
+            round(rel_delta, digits),
+        )
+
+    abs_delta_overall = 0
+    rel_delta_overall = 0
+
+    if len(abs_deltas) > 0:
+        abs_delta_overall = sum(abs_deltas.values())
+        rel_delta_overall = sum(metric_weights[name] * v for name, v in rel_deltas.items())
+
+        abs_delta_overall = round(abs_delta_overall, digits)
+        rel_delta_overall = round(rel_delta_overall, digits)
+
+    res = {
+        f"{prefix}_outliers": table,
+        f"absolute_{suffix}": abs_delta_overall,
+        f"relative_{suffix}": rel_delta_overall,
+    }
+    return res

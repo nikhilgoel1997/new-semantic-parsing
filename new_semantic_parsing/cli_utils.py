@@ -18,13 +18,13 @@ import os
 
 import toml
 import torch
-import wandb
 
 import numpy as np
 from tqdm.auto import tqdm
 
 import new_semantic_parsing as nsp
 import new_semantic_parsing.metrics
+import new_semantic_parsing.utils
 from cli.retrain import logger
 
 
@@ -80,7 +80,7 @@ def evaluate_model(
         return_tokens=True,
     )
 
-    true_tokens = _get_true_tokens(lightning_module.valid_dataset, schema_tokenizer)
+    true_tokens = _get_true_tokens_from_dataset(lightning_module.valid_dataset, schema_tokenizer)
 
     all_final_metrics = []
     for _ in tqdm(range(n_rounds), desc="Computing metrics"):
@@ -99,11 +99,11 @@ def evaluate_model(
         all_final_metrics.append(_final_metrics)
 
     metrics_statistic = _get_metrics_staistic(all_final_metrics)
-    description = _get_description(metrics_statistic)
+    description = _get_final_metrics_description(metrics_statistic)
     return metrics_statistic, description
 
 
-def _get_true_tokens(dataset, schema_tokenizer):
+def _get_true_tokens_from_dataset(dataset, schema_tokenizer):
     true_ids = dataset.target_tensors
     true_tokens = [
         schema_tokenizer.decode(t, source_ids=s, return_tokens=True, skip_special_tokens=True)
@@ -139,7 +139,7 @@ def _get_metrics_staistic(metrics):
     return metrics_statistics
 
 
-def _get_description(final_metrics):
+def _get_final_metrics_description(final_metrics):
     metric_names = final_metrics["means"].keys()
 
     description = "\n"
@@ -181,7 +181,7 @@ def check_config(pointer_module, trainer, args, strict=False):
 
 
 def iterative_prediction(
-    model,
+    model: nsp.EncoderDecoderWPointerModel,
     dataloader,
     schema_tokenizer: nsp.TopSchemaTokenizer,
     max_len,
@@ -189,6 +189,7 @@ def iterative_prediction(
     device="cpu",
     return_tokens=False,
 ):
+    """Inference-time prediction loop."""
     model = model.to(device)
 
     predictions_ids = []
@@ -234,13 +235,13 @@ def get_outliers(pretrain_metrics, final_metrics, filter_by_name=None):
         pretrain_metrics: dict with keys "means" and "stdevs",
             "means" value is a subdictionary with metric names as keys,
             "stdevs" value is a subdictionary with metric_name + "_std" as keys
-        final_metrics: dict with the structure as pretrain_metrics
-        filter_by_name: str that should be in the metric name
+        final_metrics: dict with the structure as initial_metrics
+        filter_by_name: regex pattern that metric name needs to match
     """
     negative_outliers, positive_outliers = [], []
 
     for metric_name, pretrain_mean in pretrain_metrics["means"].items():
-        if filter_by_name and filter_by_name not in metric_name:
+        if not nsp.utils.matches_pattern(metric_name, filter_by_name):
             continue
 
         pretrain_std = pretrain_metrics["stdevs"][metric_name + "_std"]
@@ -254,57 +255,6 @@ def get_outliers(pretrain_metrics, final_metrics, filter_by_name=None):
             positive_outliers.append(metric_name)
 
     return negative_outliers, positive_outliers
-
-
-def get_outliers_logs(outliers, pretrain_metrics, final_metrics, prefix, suffix, class_weights):
-    table = wandb.Table(
-        columns=[
-            "metric_name",
-            "pretrain_mean",
-            "pretrain_stdev",
-            "final_mean",
-            "final_stdev",
-            "absolute_improvement",
-            "relative_improvement",
-        ]
-    )
-
-    abs_deltas = {}
-    rel_deltas = {}
-    digits = 4
-
-    for name in outliers:
-        abs_delta = final_metrics["means"][name] - pretrain_metrics["means"][name]
-        rel_delta = abs_delta / pretrain_metrics["means"][name]
-        abs_deltas[name] = abs_delta
-        rel_deltas[name] = rel_delta
-
-        table.add_data(
-            name,
-            round(pretrain_metrics["means"][name], digits),
-            round(pretrain_metrics["stdevs"][name + "_std"], digits),
-            round(final_metrics["means"][name], digits),
-            round(final_metrics["stdevs"][name + "_std"], digits),
-            round(abs_delta, digits),
-            round(rel_delta, digits),
-        )
-
-    abs_delta_overall = 0
-    rel_delta_overall = 0
-
-    if len(abs_deltas) > 0:
-        abs_delta_overall = sum(class_weights[name] * v for name, v in abs_deltas.items())
-        rel_delta_overall = sum(class_weights[name] * v for name, v in rel_deltas.items())
-
-        abs_delta_overall = round(abs_delta_overall, digits)
-        rel_delta_overall = round(rel_delta_overall, digits)
-
-    res = {
-        f"{prefix}_outliers": table,
-        f"absolute_{suffix}": abs_delta_overall,
-        f"relative_{suffix}": rel_delta_overall,
-    }
-    return res
 
 
 def load_saved_args(path):
@@ -328,37 +278,64 @@ def load_saved_args(path):
     return train_args
 
 
-def evaluate_finetuning_procedure(pretrain_metrics, final_metrics, class_weights):
-    """Identify the classes that degraded for sure and improved for sure, compute RI and RD"""
+def evaluate_finetuning_procedure(pretrain_metrics, final_metrics, metric_weights):
+    """Identify the classes that degraded for sure and improved for sure, compute RI and RD.
 
-    deltas = get_metrics_delta(pretrain_metrics, final_metrics, filter_by_name="f1")
+    RI and RD
+
+    Args:
+        pretrain_metrics: dict metric_name:metric_value
+        final_metrics: dict metric_name:metric_value
+        metric_weights: dict metric_name:metric_weight
+
+    Returns:
+        dict with keys
+            absolute_improvement
+            relative_improvement
+            absolute_degradation
+            relative_degradation
+            n_positive_outliers
+            n_negative_outliers
+            positive_outliers
+            negative_outliers
+            delta/cls/{class_name}_tree_path_f1
+    """
+
+    metric_pattern = "cls/.*_tree_path_f1$"
+    deltas = get_metrics_delta(pretrain_metrics, final_metrics, metric_pattern)
 
     negative_outliers, positive_outliers = get_outliers(
-        pretrain_metrics, final_metrics, filter_by_name="f1"
+        pretrain_metrics, final_metrics, metric_pattern
     )
 
-    positive_outliers_metrics, negative_outliers_metrics = {}, {}
+    default_metrics = {
+        "absolute_improvement": 0,
+        "relative_improvement": 0,
+        "absolute_degradation": 0,
+        "relative_degradation": 0,
+    }
+    positive_outliers_metrics, negative_outliers_metrics = default_metrics, default_metrics
 
     if len(negative_outliers):
         logger.info(f"{len(negative_outliers)} classes degraded: {negative_outliers}")
-        negative_outliers_metrics = get_outliers_logs(
+        negative_outliers_metrics = nsp.metrics.get_outliers_metrics(
             negative_outliers,
             pretrain_metrics,
             final_metrics,
             prefix="negative",
             suffix="degradation",
-            class_weights=class_weights,
+            metric_weights=metric_weights,
         )
 
     if len(positive_outliers):
         logger.info(f"{len(positive_outliers)} classes improved: {positive_outliers}")
-        positive_outliers_metrics = get_outliers_logs(
+        positive_outliers_metrics = nsp.metrics.get_outliers_metrics(
             positive_outliers,
             pretrain_metrics,
             final_metrics,
             prefix="positive",
             suffix="improvement",
-            class_weights=class_weights,
+            metric_weights=metric_weights,
         )
 
     metrics = {
@@ -377,7 +354,7 @@ def get_metrics_delta(pretrain_metrics, final_metrics, filter_by_name=None):
     for metric_name, pretrain_mean in pretrain_metrics["means"].items():
         if metric_name.endswith("_std"):
             continue
-        if filter_by_name and filter_by_name not in metric_name:
+        if not nsp.utils.matches_pattern(metric_name, filter_by_name):
             continue
 
         deltas["delta/" + metric_name] = final_metrics["means"][metric_name] - pretrain_mean

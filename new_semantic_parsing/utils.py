@@ -17,6 +17,7 @@
 
 Include fixing random seeds, metrics computation, learning rate selection, model loading, and prediction.
 """
+import re
 import random
 import torch
 import numpy as np
@@ -119,3 +120,10 @@ def get_required_example_ids(schema_vocab, train_data):
         raise RuntimeError("Full vocabulary was not found in the training set")
 
     return required_example_ids
+
+
+def matches_pattern(string, pattern):
+    if pattern is None:
+        return True
+
+    return re.match(pattern, string) is not None
