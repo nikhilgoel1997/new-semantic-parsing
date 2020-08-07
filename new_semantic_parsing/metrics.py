@@ -469,6 +469,7 @@ def get_outliers_metrics(
             "final_stdev",
             "absolute_improvement",
             "relative_improvement",
+            "class_frequency",
         ]
     )
 
@@ -490,6 +491,7 @@ def get_outliers_metrics(
             round(final_metrics["stdevs"][name + "_std"], digits),
             round(abs_delta, digits),
             round(rel_delta, digits),
+            round(metric_weights[name], digits),
         )
 
     abs_delta_overall = 0
@@ -500,7 +502,7 @@ def get_outliers_metrics(
         rel_delta_overall = sum(metric_weights[name] * v for name, v in rel_deltas.items())
 
         abs_delta_overall = round(abs_delta_overall, digits)
-        rel_delta_overall = round(rel_delta_overall, digits)
+        rel_delta_overall = rel_delta_overall
 
     res = {
         f"{prefix}_outliers": table,

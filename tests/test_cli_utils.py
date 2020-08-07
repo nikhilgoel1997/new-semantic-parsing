@@ -32,3 +32,16 @@ class CliUtilsTest(unittest.TestCase):
         negative, positive = cli_utils.get_outliers(initial_metrics, final_metrics)
         self.assertSequenceEqual(negative, ["metric1"])
         self.assertSequenceEqual(positive, ["metric2"])
+
+    def test_get_kfold_subsets(self):
+        for k_folds in [3, 4]:
+            with self.subTest(k_folds):
+                x = [[f"tok{i}", f"tok{i}_2"] for i in range(100)]
+                y = [[f"pred_tok{i}", f"tpred_ok{i}_2", f"pred_tok{i}_3"] for i in range(100)]
+
+                folds = cli_utils._get_kfold_subsets(x, y, k_folds)
+
+                for i, (subset_x, subset_y) in enumerate(folds, 1):
+                    self.assertTrue(len(subset_x) == len(subset_y))
+
+                self.assertEqual(i, k_folds)

@@ -89,7 +89,7 @@ def make_subset(dataset, subset_size):
 
 def get_required_example_ids(schema_vocab, train_data):
     """Find a subset of train_data that contains all schema_vocab tokens.
-    
+
     Args:
         schema_vocab: set of str, required schema tokens
         train_data: pd.DataFrame with field "schema"
@@ -103,7 +103,7 @@ def get_required_example_ids(schema_vocab, train_data):
     for i, row in train_data.iterrows():
         add_this = False
         tokens_not_present = schema_vocab.difference(required_schema_vocab)
-        
+
         # Add the example id to required_example_ids if the example
         # contains a schema token not present in the required_schema_vocab
         for token in tokens_not_present:
