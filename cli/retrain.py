@@ -110,7 +110,8 @@ def parse_args(args=None):
     parser.add_argument("--batch-size", default=None, type=int)
     parser.add_argument("--max-grad-norm", default=1.0, type=float)
     parser.add_argument("--label-smoothing", default=None, type=float)
-    parser.add_argument("--no-opt-state", default=False, action="store_true")
+    parser.add_argument("--no-opt-state", default=False, action="store_true",
+                        help="Initialize optimizer state randomly instead of loading it from the trainer checkpoint")
 
     # --- freezing
     parser.add_argument("--freeze-encoder", default=None, type=int,
@@ -145,7 +146,11 @@ def parse_args(args=None):
     if (args.encoder_lr is not None) ^ (args.decoder_lr is not None):
         raise ValueError("--encoder-lr and --decoder-lr should be both specified")
 
-    if args.encoder_lr is not None:
+    if args.encoder_lr is None and args.lr is not None:
+        args.encoder_lr = args.lr
+        args.decoder_lr = args.lr
+
+    if args.lr is not None:
         args.lr = {"encoder_lr": args.encoder_lr, "decoder_lr": args.decoder_lr}
 
     args.wandb_project = args.wandb_project or "new_semantic_parsing"
@@ -298,14 +303,20 @@ def load_trainer(checkpoint_path, args, wandb_logger):
 
 
 def modify_checkpoint_for_retraining(
-    checkpoint_path, weight_decay, output_dir, no_opt_state=False, lightning_module=None
+    checkpoint_path,
+    output_dir,
+    lr=None,
+    weight_decay=None,
+    no_opt_state=False,
+    lightning_module=None,
 ):
     """Load checkpoint file, modify it and save a modified checkpoint to output_dir
 
     Args:
         checkpoint_path: str, path to lightning checkpoint
+        output_dir: str, directory to save new checkpoint with name initial_checkpoint.pl
+        lr: dict, {'encoder_lr': float, 'decoder_lr': float}
         weight_decay: float
-        output_dir: str
         no_opt_state: bool, whether to restore optimizer state or not
         lightning_module: PointerModule
 
@@ -319,11 +330,19 @@ def modify_checkpoint_for_retraining(
     if no_opt_state:
         optimizer = optimization.get_optimizers(
             lightning_module.model,
-            lightning_module.lr,
+            lr or lightning_module.lr,
             lightning_module.weight_decay,
             lightning_module.adam_eps,
         )
         checkpoint["optimizer_states"] = [optimizer.state_dict()]
+
+    if lr is not None:
+        scheduler = checkpoint["lr_schedulers"][0]
+
+        enc_lr, dec_lr = lr["encoder_lr"], lr["decoder_lr"]
+        scheduler["base_lrs"] = [dec_lr, dec_lr, enc_lr, enc_lr]
+
+        checkpoint["lr_schedulers"][0] = scheduler
 
     # global_step will be incremented in .test call
     # -1 is used to get metrics before the training
@@ -436,8 +455,9 @@ def main(args):
     # override some of the parameters saved in the Trainer
     checkpoint_path = modify_checkpoint_for_retraining(
         train_args["pl_checkpoint_path"],
-        args.weight_decay,
         args.output_dir,
+        args.lr,
+        args.weight_decay,
         args.no_opt_state,
         lightning_module,
     )
