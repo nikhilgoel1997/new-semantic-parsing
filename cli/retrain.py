@@ -53,6 +53,10 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
 def parse_args(args=None):
+    """Parge cli arguments.
+
+    This function is shared between retrain.py and retrain_simple.py
+    """
     parser = argparse.ArgumentParser()
 
     # fmt: off
@@ -99,17 +103,19 @@ def parse_args(args=None):
                         help="Decoder learning rate, overrides --lr")
 
     parser.add_argument("--weight-decay", default=None, type=float)
-    parser.add_argument("--move-norm", default=None, type=float,
-                        help="regularization coefficient for the distance between the initial and current network")
-    parser.add_argument("--move-norm-p", default=2, type=int,
-                        help="p of the L-p norm used in move-norm regularization")
     parser.add_argument("--dropout", default=None, type=float,
                         help="dropout amount for the encoder and decoder, by defalut checkpoint value is used")
-    parser.add_argument("--warmup-steps", default=None, type=int)
+    parser.add_argument("--warmup-steps", default=0, type=int)
     parser.add_argument("--gradient-accumulation-steps", default=1, type=int)
     parser.add_argument("--batch-size", default=None, type=int)
     parser.add_argument("--max-grad-norm", default=1.0, type=float)
     parser.add_argument("--label-smoothing", default=None, type=float)
+
+    # --- retrain-specific
+    parser.add_argument("--move-norm", default=None, type=float,
+                        help="regularization coefficient for the distance between the initial and current network")
+    parser.add_argument("--move-norm-p", default=2, type=int,
+                        help="p of the L-p norm used in move-norm regularization")
     parser.add_argument("--no-opt-state", default=False, action="store_true",
                         help="Initialize optimizer state randomly instead of loading it from the trainer checkpoint")
 
@@ -175,6 +181,13 @@ def parse_args(args=None):
         raise ValueError(args.old_data_sampling_method)
 
     return args
+
+
+def check_args(args):
+    if args.lr is not None:
+        raise ValueError(
+            "learning rate specification is not supported, use retrain_simple.py instead"
+        )
 
 
 def load_tokenizer(model_dir, data_dir):
@@ -335,14 +348,6 @@ def modify_checkpoint_for_retraining(
             lightning_module.adam_eps,
         )
         checkpoint["optimizer_states"] = [optimizer.state_dict()]
-
-    if lr is not None:
-        scheduler = checkpoint["lr_schedulers"][0]
-
-        enc_lr, dec_lr = lr["encoder_lr"], lr["decoder_lr"]
-        scheduler["base_lrs"] = [dec_lr, dec_lr, enc_lr, enc_lr]
-
-        checkpoint["lr_schedulers"][0] = scheduler
 
     # global_step will be incremented in .test call
     # -1 is used to get metrics before the training
@@ -521,4 +526,5 @@ def main(args):
 
 if __name__ == "__main__":
     args = parse_args()
+    check_args(args)
     main(args)

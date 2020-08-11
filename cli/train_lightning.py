@@ -30,6 +30,7 @@ import pytorch_lightning as pl
 
 import new_semantic_parsing as nsp
 import new_semantic_parsing.callbacks
+import new_semantic_parsing.dataclasses
 
 from new_semantic_parsing import utils, cli_utils
 
@@ -98,8 +99,7 @@ def parse_args(args=None):
                         help="Lightning-only. Early stopping patience. No early stopping by default.")
 
     parser.add_argument("--seed", default=1, type=int)
-    parser.add_argument("--lr", default=None, type=float,
-                        help="By default, lr is chosen according to the Scaling Laws for Neural Language Models")
+    parser.add_argument("--lr", type=float, required=True)
     parser.add_argument("--encoder-lr", default=None, type=float,
                         help="Encoder learning rate, overrides --lr")
     parser.add_argument("--decoder-lr", default=None, type=float,
@@ -240,6 +240,35 @@ def make_model(schema_tokenizer, max_src_len, args, preprocess_args=None):
     return model
 
 
+def make_lightning_module(
+    model, schema_tokenizer, train_dataset, eval_dataset, args, wandb_logger
+):
+    new_classes = None
+    if args.new_classes_file is not None:
+        with open(args.new_classes_file) as f:
+            new_classes = f.read().strip().split("\n")
+            wandb_logger.log_hyperparams({"new_classes": " ".join(new_classes)})
+
+    freezing_schedule = nsp.dataclasses.EncDecFreezingSchedule.from_args(args)
+
+    lightning_module = nsp.PointerModule(
+        model=model,
+        schema_tokenizer=schema_tokenizer,
+        train_dataset=train_dataset,
+        valid_dataset=eval_dataset,
+        lr=args.lr,
+        batch_size=args.batch_size,
+        warmup_steps=args.warmup_steps,
+        weight_decay=args.weight_decay,
+        log_every=args.log_every,
+        monitor_classes=new_classes,
+        freezing_schedule=freezing_schedule,
+    )
+
+    wandb_logger.watch(lightning_module, log="all", log_freq=args.log_every)
+    return lightning_module
+
+
 def make_trainer(args, wandb_logger):
     """Make lightning Trainer with callbacks for checkpointing, early stopping and lr logging.
 
@@ -311,6 +340,8 @@ def main(args):
     train_dataset: nsp.PointerDataset = datasets["train_dataset"]
     eval_dataset: nsp.PointerDataset = datasets["valid_dataset"]
 
+    wandb_logger.log_hyperparams({"num_data": len(train_dataset)})
+
     max_src_len, _ = train_dataset.get_max_len()
 
     try:
@@ -325,32 +356,9 @@ def main(args):
 
     logger.info("Preparing for training")
 
-    new_classes = None
-    if args.new_classes_file is not None:
-        with open(args.new_classes_file) as f:
-            new_classes = f.read().strip().split("\n")
-            wandb_logger.log_hyperparams({"new_classes": " ".join(new_classes)})
-
-    freezing_schedule = nsp.dataclasses.EncDecFreezingSchedule.from_args(args)
-
-    wandb_logger.log_hyperparams({"num_data": len(train_dataset)})
-
-    lightning_module = nsp.PointerModule(
-        model=model,
-        schema_tokenizer=schema_tokenizer,
-        train_dataset=train_dataset,
-        valid_dataset=eval_dataset,
-        lr=args.lr,
-        batch_size=args.batch_size,
-        warmup_steps=args.warmup_steps,
-        weight_decay=args.weight_decay,
-        log_every=args.log_every,
-        monitor_classes=new_classes,
-        freezing_schedule=freezing_schedule,
+    lightning_module = make_lightning_module(
+        model, schema_tokenizer, train_dataset, eval_dataset, args, wandb_logger
     )
-
-    wandb_logger.watch(lightning_module, log="all", log_freq=args.log_every)
-
     trainer = make_trainer(args, wandb_logger)
 
     # --- FIT
