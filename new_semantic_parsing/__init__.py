@@ -13,7 +13,7 @@
 # limitations under the License.
 # =============================================================================
 
-SAVE_FORMAT_VERSION = "0.5-nightly-Jul27"
+SAVE_FORMAT_VERSION = "0.6-nightly-Aug12"
 
 from .configuration_encoder_decoder_wpointer import EncoderDecoderWPointerConfig
 from .data import PointerDataset

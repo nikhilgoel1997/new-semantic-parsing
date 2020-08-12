@@ -154,6 +154,7 @@ def main(args):
         schema_tokenizer,
         eval_dataset,
         prefix="eval",
+        max_len=train_args.get("max_tgt_len", 68),  # 68 is max_tgt_len for TOP
     )
 
     logger.info(description)

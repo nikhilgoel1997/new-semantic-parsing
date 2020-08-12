@@ -343,10 +343,9 @@ def modify_checkpoint_for_retraining(
 
     if no_opt_state:
         optimizer = optimization.get_optimizers(
-            lightning_module.model,
-            lr or lightning_module.lr,
-            lightning_module.weight_decay,
-            lightning_module.adam_eps,
+            model=lightning_module.model,
+            learning_rate=lr or lightning_module.lr,
+            weight_decay=lightning_module.weight_decay,
         )
         checkpoint["optimizer_states"] = [optimizer.state_dict()]
 
@@ -501,6 +500,7 @@ def main(args):
         schema_tokenizer,
         eval_dataset,
         prefix="eval",
+        max_len=train_args.get("max_tgt_len", 68),  # 68 is max_tgt_len for TOP
     )
 
     logger.info(description)

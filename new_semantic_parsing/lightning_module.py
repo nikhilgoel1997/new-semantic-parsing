@@ -40,13 +40,15 @@ class PointerModule(LightningModule):
         text_tokenizer: transformers.PreTrainedTOkenizer, ^^
         train_dataset: PointerDataset
         valid_dataset: PointerDataset
-        test_dataset: optional, PointerDataset which may not have labels
         lr: learning rate, either float of dictionary with keys encoder_lr and decoder_lr
         batch_size: int, batch size used for training and evaluation
         warmup_steps: int
         weight_decay: float
-        num_frozen_encoder_steps: int, number of steps at the beginning of the training when encoder weights are not updated
         log_every: int, log to wandb each log_every steps
+        monitor_classes: list of class names, monitor_classes[0] and all
+            set of monitor_classes are logged specificly log_every steps
+        max_tgt_len: maximum target length for evaluation
+        freezing_schedule: EncDecFreezingSchedule, when to freeze and unfreeze encoder, decoder and head
     """
 
     def __init__(
@@ -59,11 +61,10 @@ class PointerModule(LightningModule):
         batch_size=32,
         warmup_steps=0,
         weight_decay=0.0,
-        adam_eps=1e-9,
-        num_frozen_encoder_steps=0,
         test_dataset=None,
         log_every=50,
         monitor_classes=None,
+        max_tgt_len=68,
         freezing_schedule: EncDecFreezingSchedule = None,
     ):
         super().__init__()
@@ -80,11 +81,10 @@ class PointerModule(LightningModule):
         self.batch_size = batch_size
         self.warmup_steps = warmup_steps
         self.weight_decay = weight_decay
-        self.num_frozen_encoder_steps = num_frozen_encoder_steps
-        self.adam_eps = adam_eps
         self.log_every = log_every
         self.monitor_classes = monitor_classes
         self.freezing_schedule = freezing_schedule
+        self.max_tgt_len = max_tgt_len
 
         self._collator = data.Seq2SeqDataCollator(
             pad_id=self.text_tokenizer.pad_token_id,
@@ -156,10 +156,7 @@ class PointerModule(LightningModule):
 
     def configure_optimizers(self):
         optimizer = opt.get_optimizers(
-            model=self.model,
-            learning_rate=self.lr,
-            weight_decay=self.weight_decay,
-            adam_eps=self.adam_eps,
+            model=self.model, learning_rate=self.lr, weight_decay=self.weight_decay,
         )
 
         scheduler = opt.get_noam_schedule(
@@ -294,7 +291,7 @@ class PointerModule(LightningModule):
             input_ids=batch["input_ids"].to(self.device),
             pointer_mask=batch["pointer_mask"].to(self.device),
             attention_mask=batch["attention_mask"].to(self.device),
-            max_length=68,
+            max_length=self.max_tgt_len,
             num_beams=1,
             pad_token_id=self.text_tokenizer.pad_token_id,
             bos_token_id=self.schema_tokenizer.bos_token_id,

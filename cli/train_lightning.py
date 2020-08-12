@@ -339,7 +339,7 @@ def main(args):
 
     wandb_logger.log_hyperparams({"num_data": len(train_dataset)})
 
-    max_src_len, _ = train_dataset.get_max_len()
+    max_src_len, max_tgt_len = train_dataset.get_max_len()
 
     try:
         preprocess_args = cli_utils.load_saved_args(path_join(args.data_dir, "args.toml"))
@@ -374,6 +374,7 @@ def main(args):
         schema_tokenizer,
         eval_dataset,
         prefix="eval",
+        max_len=max_tgt_len,
     )
 
     with open(path_join(args.output_dir, "args.toml"), "w") as f:
@@ -381,6 +382,8 @@ def main(args):
             "version": nsp.SAVE_FORMAT_VERSION,
             "pl_checkpoint_path": trainer.checkpoint_callback.last_checkpoint_path,
             "metrics": final_metrics,
+            "max_src_len": max_src_len,
+            "max_tgt_len": max_tgt_len,
             **vars(args),
         }
         toml.dump(args_dict, f)

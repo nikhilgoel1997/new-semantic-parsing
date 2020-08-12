@@ -95,6 +95,8 @@ def train_finetune_split(train_data, schema_vocab, split_amount, split_class=Non
     if split_class is not None:
         ids = set(train_data.index[train_data.schema.str.contains(split_class)])
         logger.info(f"Moving {100 * split_amount}% of {split_class} into a finetuning subset")
+        if len(ids) == 0:
+            raise RuntimeError(f"Cannot find specified class {split_class} in the data.")
 
     split_ids = list(ids - required_example_ids)
 

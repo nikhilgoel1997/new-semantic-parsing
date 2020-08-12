@@ -33,9 +33,8 @@ def evaluate_model(
     schema_tokenizer: nsp.TopSchemaTokenizer,
     eval_dataset,
     prefix,
+    max_len,
     n_rounds=5,
-    subset_size=0.7,
-    max_len=68,
     num_beams=1,
 ):
     """Compute metrics for each class n_rounds times and average results
