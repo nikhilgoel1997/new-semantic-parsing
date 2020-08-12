@@ -88,3 +88,23 @@ class TestGetMetircsTorch(unittest.TestCase):
         self.assertAlmostEqual(
             metrics["first_intent_precision"].numpy(), expected_intent_precision
         )
+
+
+class TestSnips(unittest.TestCase):
+    def test_snips2top(self):
+        ex1 = [
+            {"text": "Weather "},
+            {"text": "tomorrow", "entity": "timeRange"},
+            {"text": " in "},
+            {"text": "Lowell", "entity": "geographic_poi"},
+        ]
+        intent1 = "GetWeather"
+        expected_text = "Weather tomorrow in Lowell"
+        expected_schema = (
+            "[IN:GETWEATHER Weather [SL:TIMERANGE tomorrow ] in [SL:GEOGRAPHIC_POI Lowell ] ]"
+        )
+
+        out_text, out_schema = utils.snips2top(ex1, intent1)
+
+        self.assertSequenceEqual(expected_text, out_text)
+        self.assertSequenceEqual(expected_schema, out_schema)

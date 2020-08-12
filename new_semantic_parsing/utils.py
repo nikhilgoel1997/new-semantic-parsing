@@ -17,10 +17,15 @@
 
 Include fixing random seeds, metrics computation, learning rate selection, model loading, and prediction.
 """
-import re
+import glob
+import os
 import random
-import torch
+import re
+import json
+
 import numpy as np
+import pandas as pd
+import torch
 import transformers
 
 
@@ -127,3 +132,52 @@ def matches_pattern(string, pattern):
         return True
 
     return re.match(pattern, string) is not None
+
+
+def snips2top(snips_example, intent):
+    """Convert Snips format to TOP format
+
+    Args:
+        snips_example: list, one example following snips format
+        intent: str
+
+    Returns:
+        query_text, top_format_schema
+    """
+    query_text = ""
+    top_format_str = f"[IN:{intent.upper()}"
+
+    for text_chunk in snips_example:
+        text = text_chunk["text"].strip(" ")
+
+        if "entity" in text_chunk:
+            entity_name = text_chunk["entity"].upper()
+            top_format_str += f" [SL:{entity_name} {text} ]"
+
+        else:
+            top_format_str += " " + text
+
+        query_text += " " + text
+
+    query_text = query_text.strip(" ")
+    top_format_str += " ]"
+
+    return query_text, top_format_str
+
+
+def make_snips_df(snips_files):
+    snips_data = []
+    for train_file in snips_files:
+        with open(train_file, encoding="latin-1") as f:
+            data = json.load(f)
+
+        assert len(data.keys()) == 1, data.keys()
+        intent = list(data.keys())[0]
+
+        for example in data[intent]:
+            assert len(example.keys()) == 1
+            text, schema = snips2top(example["data"], intent)
+            snips_data.append([text, text, schema])
+
+    snips_df = pd.DataFrame(snips_data, columns=["text", "tokens", "schema"])
+    return snips_df
