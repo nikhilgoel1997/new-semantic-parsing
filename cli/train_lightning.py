@@ -61,8 +61,8 @@ def parse_args(args=None):
     parser.add_argument("--eval-data-amount", default=1.0, type=float,
                         help="amount of validation set to use when training. "
                              "The final evaluation will use the full dataset.")
-    parser.add_argument("--new-classes-file", default=None,
-                        help="path to a text file with names of classes to track, one class per line")
+    parser.add_argument("--new-classes", default=None,
+                        help="names of classes to track")
 
     # model
     parser.add_argument("--encoder-model", default=None,
@@ -99,7 +99,7 @@ def parse_args(args=None):
                         help="Lightning-only. Early stopping patience. No early stopping by default.")
 
     parser.add_argument("--seed", default=1, type=int)
-    parser.add_argument("--lr", type=float, required=True)
+    parser.add_argument("--lr", type=float)
     parser.add_argument("--encoder-lr", default=None, type=float,
                         help="Encoder learning rate, overrides --lr")
     parser.add_argument("--decoder-lr", default=None, type=float,
@@ -153,6 +153,7 @@ def parse_args(args=None):
     args.decoder_heads = args.decoder_heads or args.heads
     args.wandb_project = args.wandb_project or "new_semantic_parsing"
     args.tags = args.tags.split(",") if args.tags else []  # list is required by wandb interface
+    args.new_classes = args.new_classes.split(",") if args.new_classes else []
 
     if args.split_amount_finetune is not None:
         args.split_amount_train = 1.0 - args.split_amount_finetune
@@ -243,11 +244,7 @@ def make_model(schema_tokenizer, max_src_len, args, preprocess_args=None):
 def make_lightning_module(
     model, schema_tokenizer, train_dataset, eval_dataset, args, wandb_logger
 ):
-    new_classes = None
-    if args.new_classes_file is not None:
-        with open(args.new_classes_file) as f:
-            new_classes = f.read().strip().split("\n")
-            wandb_logger.log_hyperparams({"new_classes": " ".join(new_classes)})
+    wandb_logger.log_hyperparams({"new_classes": " ".join(args.new_classes)})
 
     freezing_schedule = nsp.dataclasses.EncDecFreezingSchedule.from_args(args)
 
@@ -261,7 +258,7 @@ def make_lightning_module(
         warmup_steps=args.warmup_steps,
         weight_decay=args.weight_decay,
         log_every=args.log_every,
-        monitor_classes=new_classes,
+        monitor_classes=args.new_classes,
         freezing_schedule=freezing_schedule,
     )
 

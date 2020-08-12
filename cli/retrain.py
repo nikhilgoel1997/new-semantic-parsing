@@ -70,8 +70,8 @@ def parse_args(args=None):
     parser.add_argument("--eval-data-amount", default=1., type=float,
                         help="amount of validation set to use when training. "
                              "The final evaluation will use the full dataset.")
-    parser.add_argument("--new-classes-file", default=None,
-                        help="path to a text file with names of classes to track, one class per line")
+    parser.add_argument("--new-classes", default=None,
+                        help="names of classes to track")
 
     parser.add_argument("--new-data-amount", default=1., type=float,
                         help="amount of new data (finetune_set) to train on, 0 < amount <= 1")
@@ -161,6 +161,7 @@ def parse_args(args=None):
 
     args.wandb_project = args.wandb_project or "new_semantic_parsing"
     args.tags = args.tags.split(",") if args.tags else []  # list is required by wandb interface
+    args.new_classes = args.new_classes.split(",") if args.new_classes else []
 
     if args.split_amount_finetune is not None:
         args.split_amount_train = 1.0 - args.split_amount_finetune
@@ -377,11 +378,7 @@ def load_lightning_module(
 ):
     """Load lightning module with some of the parameters overwritten."""
 
-    new_classes = None
-    if args.new_classes_file is not None:
-        with open(args.new_classes_file) as f:
-            new_classes = f.read().strip().split("\n")
-            wandb_logger.log_hyperparams({"new_classes": " ".join(new_classes)})
+    wandb_logger.log_hyperparams({"new_classes": " ".join(args.new_classes)})
 
     # Lightning loads all params which are not specified in .load_from_checkpoint
     # thus, some arguments are only provided if we want to override the loaded values
@@ -402,7 +399,7 @@ def load_lightning_module(
         schema_tokenizer=schema_tokenizer,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        monitor_classes=new_classes,
+        monitor_classes=args.new_classes,
         **module_kwargs,
     )
 

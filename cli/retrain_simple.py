@@ -54,8 +54,8 @@ def check_args(args):
     if args.lr is None:
         raise ValueError("--lr or --encoder-lr and --decoder-lr should be specified")
 
-    if args.new_classes_file is None:
-        logger.warning("--new-classes-file is not specified for finetuning")
+    if args.new_classes is None:
+        logger.warning("--new-classes is not specified for finetuning")
 
 
 def set_default_args(args):
