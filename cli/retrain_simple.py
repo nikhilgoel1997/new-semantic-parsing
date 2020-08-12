@@ -34,8 +34,8 @@ import new_semantic_parsing as nsp
 
 from new_semantic_parsing import utils, cli_utils
 
-from . import train_lightning as cli_train
-from . import retrain as cli_retrain
+from cli import train_lightning as cli_train
+from cli import retrain as cli_retrain
 
 
 logging.basicConfig(
