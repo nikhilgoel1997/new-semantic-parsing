@@ -152,7 +152,7 @@ def parse_args(args=None):
     if (args.encoder_lr is not None) ^ (args.decoder_lr is not None):
         raise ValueError("--encoder-lr and --decoder-lr should be both specified")
 
-    if args.encoder_lr is None and args.lr is not None:
+    if args.encoder_lr is None and args.decoder_lr is not None:
         args.encoder_lr = args.lr
         args.decoder_lr = args.lr
 
