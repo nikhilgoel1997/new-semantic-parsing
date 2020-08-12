@@ -242,7 +242,7 @@ def make_model(schema_tokenizer, max_src_len, args, preprocess_args=None):
 
 
 def make_lightning_module(
-    model, schema_tokenizer, train_dataset, eval_dataset, args, wandb_logger
+    model, schema_tokenizer, train_dataset, eval_dataset, max_tgt_len, args, wandb_logger
 ):
     wandb_logger.log_hyperparams({"new_classes": " ".join(args.new_classes)})
 
@@ -260,6 +260,7 @@ def make_lightning_module(
         log_every=args.log_every,
         monitor_classes=args.new_classes,
         freezing_schedule=freezing_schedule,
+        max_tgt_len=max_tgt_len,
     )
 
     wandb_logger.watch(lightning_module, log="all", log_freq=args.log_every)
@@ -354,7 +355,7 @@ def main(args):
     logger.info("Preparing for training")
 
     lightning_module = make_lightning_module(
-        model, schema_tokenizer, train_dataset, eval_dataset, args, wandb_logger
+        model, schema_tokenizer, train_dataset, eval_dataset, max_tgt_len, args, wandb_logger
     )
     trainer = make_trainer(args, wandb_logger)
 

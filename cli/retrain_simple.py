@@ -120,7 +120,7 @@ def main(args):
     logger.info("Preparing for training")
 
     lightning_module = cli_train.make_lightning_module(
-        model, schema_tokenizer, train_dataset, eval_dataset, args, wandb_logger
+        model, schema_tokenizer, train_dataset, eval_dataset, max_tgt_len, args, wandb_logger
     )
     trainer = cli_train.make_trainer(args, wandb_logger)
 
