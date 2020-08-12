@@ -119,7 +119,7 @@ def main(args):
 
     logger.info("Preparing for training")
 
-    max_tgt_len = train_args.get("max_tgt_len", train_dataset)
+    max_tgt_len = train_args.get("max_tgt_len", 68)
 
     lightning_module = cli_train.make_lightning_module(
         model, schema_tokenizer, train_dataset, eval_dataset, max_tgt_len, args, wandb_logger
