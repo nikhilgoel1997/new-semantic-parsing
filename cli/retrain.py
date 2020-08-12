@@ -152,11 +152,11 @@ def parse_args(args=None):
     if (args.encoder_lr is not None) ^ (args.decoder_lr is not None):
         raise ValueError("--encoder-lr and --decoder-lr should be both specified")
 
-    if args.encoder_lr is None and args.decoder_lr is not None:
+    if args.encoder_lr is None and args.lr is not None:
         args.encoder_lr = args.lr
         args.decoder_lr = args.lr
 
-    if args.lr is not None:
+    if args.lr is None:
         args.lr = {"encoder_lr": args.encoder_lr, "decoder_lr": args.decoder_lr}
 
     args.wandb_project = args.wandb_project or "new_semantic_parsing"
