@@ -56,8 +56,14 @@ if __name__ == "__main__":
     )
 
     logger.info("Reformatting snips into TOP format")
-    snips_trainval: pd.DataFrame = utils.make_snips_df(glob.glob(snips_train_pattern))
-    snips_test: pd.DataFrame = utils.make_snips_df(glob.glob(snips_test_pattern))
+    train_fnames = glob.glob(snips_train_pattern)
+    test_fnames = glob.glob(snips_test_pattern)
+
+    if len(train_fnames) == 0 or len(test_fnames) == 0:
+        raise RuntimeError("--snips-path is empty or does not have the expected structure")
+
+    snips_trainval: pd.DataFrame = utils.make_snips_df(train_fnames)
+    snips_test: pd.DataFrame = utils.make_snips_df(test_fnames)
 
     logger.info("Creating train/valid split")
     permutation = np.random.permutation(len(snips_trainval))
