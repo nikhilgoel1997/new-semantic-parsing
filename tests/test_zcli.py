@@ -28,14 +28,12 @@ OUTPUT_DIR = "test_cli/retrain_output"
 EPOCHS = 2
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+data_exists = os.path.exists(DATA)
+skip_msg = "Ignoring CLI tests as the data is not present"
 
 
 class TestPreprocessCLI(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        if not os.path.exists(DATA):
-            unittest.SkipTest("Ignoring CLI tests as the data is not present")
-
+    @unittest.skipUnless(data_exists, skip_msg)
     def test01_preprocess(self):
         shutil.rmtree(DATA_BIN, ignore_errors=True)
 
@@ -51,6 +49,7 @@ class TestPreprocessCLI(unittest.TestCase):
         args = preprocess.parse_args(args)
         preprocess.main(args)
 
+    @unittest.skipUnless(data_exists, skip_msg)
     def test01_preprocess_split(self):
         shutil.rmtree(DATA_BIN, ignore_errors=True)
 
@@ -68,6 +67,7 @@ class TestPreprocessCLI(unittest.TestCase):
         args = preprocess.parse_args(args)
         preprocess.main(args)
 
+    @unittest.skipUnless(data_exists, skip_msg)
     def test01_preprocess_snips(self):
         shutil.rmtree(DATA_BIN_SNIPS, ignore_errors=True)
 
@@ -83,6 +83,7 @@ class TestPreprocessCLI(unittest.TestCase):
         args = preprocess.parse_args(args)
         preprocess.main(args)
 
+    @unittest.skipUnless(data_exists, skip_msg)
     def test01_preprocess_snips_split(self):
         shutil.rmtree(DATA_BIN_SNIPS, ignore_errors=True)
 
@@ -102,6 +103,7 @@ class TestPreprocessCLI(unittest.TestCase):
         args = preprocess.parse_args(args)
         preprocess.main(args)
 
+    @unittest.skipUnless(data_exists, skip_msg)
     def test02_preprocess_split_class(self):
         shutil.rmtree(DATA_BIN, ignore_errors=True)
 
@@ -121,6 +123,7 @@ class TestPreprocessCLI(unittest.TestCase):
         args = preprocess.parse_args(args)
         preprocess.main(args)
 
+    @unittest.skipUnless(data_exists, skip_msg)
     def test03_train(self):
         shutil.rmtree(MODEL_DIR, ignore_errors=True)
 
@@ -160,6 +163,7 @@ class TestPreprocessCLI(unittest.TestCase):
         args = train_lightning.parse_args(args)
         train_lightning.main(args)
 
+    @unittest.skipUnless(data_exists, skip_msg)
     def test04_retrain(self):
         shutil.rmtree(OUTPUT_DIR, ignore_errors=True)
 
@@ -185,6 +189,7 @@ class TestPreprocessCLI(unittest.TestCase):
         args = retrain.parse_args(args)
         retrain.main(args)
 
+    @unittest.skipUnless(data_exists, skip_msg)
     def test05_retrain_noargs(self):
         shutil.rmtree(OUTPUT_DIR, ignore_errors=True)
 
@@ -206,6 +211,7 @@ class TestPreprocessCLI(unittest.TestCase):
         args = retrain.parse_args(args)
         retrain.main(args)
 
+    @unittest.skipUnless(data_exists, skip_msg)
     def test06_retrain_old_data001_merge(self):
         shutil.rmtree(OUTPUT_DIR, ignore_errors=True)
 
@@ -233,6 +239,7 @@ class TestPreprocessCLI(unittest.TestCase):
         args = retrain.parse_args(args)
         retrain.main(args)
 
+    @unittest.skipUnless(data_exists, skip_msg)
     def test07_retrain_old_data001_sample(self):
         shutil.rmtree(OUTPUT_DIR, ignore_errors=True)
 
@@ -258,6 +265,7 @@ class TestPreprocessCLI(unittest.TestCase):
         args = retrain.parse_args(args)
         retrain.main(args)
 
+    @unittest.skipUnless(data_exists, skip_msg)
     def test08_retrain_move_norm(self):
         shutil.rmtree(OUTPUT_DIR, ignore_errors=True)
 
@@ -281,6 +289,7 @@ class TestPreprocessCLI(unittest.TestCase):
         args = retrain.parse_args(args)
         retrain.main(args)
 
+    @unittest.skipUnless(data_exists, skip_msg)
     def test08_retrain_move_norm_p(self):
         shutil.rmtree(OUTPUT_DIR, ignore_errors=True)
 
@@ -306,6 +315,7 @@ class TestPreprocessCLI(unittest.TestCase):
         args = retrain.parse_args(args)
         retrain.main(args)
 
+    @unittest.skipUnless(data_exists, skip_msg)
     def test09_retrain_no_opt(self):
         shutil.rmtree(OUTPUT_DIR, ignore_errors=True)
 
@@ -328,6 +338,7 @@ class TestPreprocessCLI(unittest.TestCase):
         args = retrain.parse_args(args)
         retrain.main(args)
 
+    @unittest.skipUnless(data_exists, skip_msg)
     def test10_retrain_dropout(self):
         shutil.rmtree(OUTPUT_DIR, ignore_errors=True)
 
@@ -351,6 +362,7 @@ class TestPreprocessCLI(unittest.TestCase):
         args = retrain.parse_args(args)
         retrain.main(args)
 
+    @unittest.skipUnless(data_exists, skip_msg)
     def test11_retrain_weightdecay(self):
         shutil.rmtree(OUTPUT_DIR, ignore_errors=True)
 
@@ -374,6 +386,7 @@ class TestPreprocessCLI(unittest.TestCase):
         args = retrain.parse_args(args)
         retrain.main(args)
 
+    @unittest.skipUnless(data_exists, skip_msg)
     def test12_retrain_labelsmoothing(self):
         shutil.rmtree(OUTPUT_DIR, ignore_errors=True)
 
@@ -397,6 +410,7 @@ class TestPreprocessCLI(unittest.TestCase):
         args = retrain.parse_args(args)
         retrain.main(args)
 
+    @unittest.skipUnless(data_exists, skip_msg)
     def test13_retrain_limit_iters(self):
         shutil.rmtree(OUTPUT_DIR, ignore_errors=True)
 
@@ -424,6 +438,7 @@ class TestPreprocessCLI(unittest.TestCase):
         args = retrain.parse_args(args)
         retrain.main(args)
 
+    @unittest.skipUnless(data_exists, skip_msg)
     def test14_retrain_limit_iters(self):
         shutil.rmtree(OUTPUT_DIR, ignore_errors=True)
 
@@ -451,6 +466,7 @@ class TestPreprocessCLI(unittest.TestCase):
         args = retrain.parse_args(args)
         retrain.main(args)
 
+    @unittest.skipUnless(data_exists, skip_msg)
     def test15_retrain_simple(self):
         shutil.rmtree(OUTPUT_DIR, ignore_errors=True)
 
@@ -481,6 +497,7 @@ class TestPreprocessCLI(unittest.TestCase):
 
         retrain_simple.main(args)
 
+    @unittest.skipUnless(data_exists, skip_msg)
     def test15_retrain_simple_encdeclr(self):
         shutil.rmtree(OUTPUT_DIR, ignore_errors=True)
 
@@ -513,6 +530,7 @@ class TestPreprocessCLI(unittest.TestCase):
 
         retrain_simple.main(args)
 
+    @unittest.skipUnless(data_exists, skip_msg)
     def test15_retrain_simple_no_sched(self):
         shutil.rmtree(OUTPUT_DIR, ignore_errors=True)
 
