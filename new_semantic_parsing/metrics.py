@@ -13,16 +13,15 @@
 # limitations under the License.
 # =============================================================================
 """Metrics computation."""
+
 from collections import Counter
 from functools import reduce
 from operator import add
-from typing import List
 from pprint import pformat
+from typing import List
 
-import numpy as np
 import torch
-
-from new_semantic_parsing.dataclasses import Seq2SeqEvalPrediciton
+import wandb
 
 
 LBR = "["
@@ -94,14 +93,14 @@ class Tree:
         return self._counts
 
     @classmethod
-    def from_tokens(cls, tokens, return_index=False):
+    def from_tokens(cls, tokens, return_index=False, inside_slot=False):
         """Builds a parsing tree for labeled bracketing score computation.
 
         The tree is build until the last ] symbol, everything after it is ignored
 
         Args:
             tokens: list of tokens
-            return_index: used in recursion to provide toke index
+            return_index: used in recursion to provide token index
 
         Returns:
             Tree object, if return_index == False
@@ -127,21 +126,29 @@ class Tree:
         slot_value_tokens = []
 
         i = 3
+        inside_slot = inside_slot or entity_type == SL
         while i < len(tokens):
             token = tokens[i]
 
             # ignore non-slot values
             # e.g. ignore "go stuff in" [IN:STUFF Do stuff]
-            if entity_type == IN and token not in [LBR, RBR]:
+            if not inside_slot and token not in [LBR, RBR]:
                 i += 1
                 continue
 
             # LBR starts a new subtree
             if token == LBR:
-                subtree, j = cls.from_tokens(tokens[i:], return_index=True)
+                subtree, j = cls.from_tokens(
+                    tokens[i:], return_index=True, inside_slot=inside_slot
+                )
+
+                if slot_value_tokens:
+                    subtrees.append(Tree(" ".join(slot_value_tokens)))
+                    slot_value_tokens = []
 
                 subtrees.append(subtree)
                 i += j
+
                 continue
 
             # RBR ends the tree, merge slot values into a single leaf if any
@@ -149,13 +156,14 @@ class Tree:
             if token == RBR:
                 if slot_value_tokens:
                     subtrees.append(Tree(" ".join(slot_value_tokens)))
+                    slot_value_tokens = []
+
                 i += 1
                 break
 
-            if entity_type == SL:
-                slot_value_tokens.append(token)
-                i += 1
-                continue
+            # if the token is not a special symbol and inside SL: bracket (probably, nested)
+            slot_value_tokens.append(token)
+            i += 1
 
         tree = Tree(entity, subtrees)
 
@@ -164,11 +172,68 @@ class Tree:
 
         return tree
 
+    def to_tokens(self):
+        if not self.subtrees:
+            return self.entity
+
+        return f"[{self.entity} {self.subtrees_to_tokens()}]"
+
+    def subtrees_to_tokens(self):
+        return " ".join([s.to_tokens() for s in self.subtrees])
+
+
+# Main function
+
+
+def get_metrics(
+    pred_tokens, true_tokens, monitor_classes, prefix, schema_tokenizer, do_each=False
+):
+    """Compute exact_match and tree-based metrics
+
+    Apply prefix to all keys.
+    The main purpuse of this function is to unify evaluation in PointerModule and cli_utils.evaluate_model()
+
+    Args:
+        pred_tokens: List[List[str]]
+        true_tokens: List[List[str]]
+        monitor_classes: List[str]
+        prefix: str, will be appended to all return dict keys
+        schema_tokenizer: TopSchemaTokenizer
+        do_each: bool, if False compute tree path metrics only for monitor_classes[0] and overall
+            if True compute tree path metrics for all monitor_classes and overall
+
+    Returns:
+        dictionary with keys
+            {prefix}_{score_name}
+            {prefix}_new_classes_{score_name}
+            cls/{prefix}_{monitor_classes[i]}_{score_name}; if do_each=False then only i == 0, else for each class
+        for each score_name - key from get_tree_path_scores output dictionary
+    """
+    exact_match = sum(int(str(p) == str(l)) for p, l in zip(pred_tokens, true_tokens))
+    exact_match /= len(true_tokens)
+
+    tree_metrics = get_tree_path_metrics(
+        pred_tokens, true_tokens, monitor_classes, prefix, do_each
+    )
+
+    pred_strs = [schema_tokenizer.detokenize(p) for p in pred_tokens]
+    true_strs = [schema_tokenizer.detokenize(p) for p in true_tokens]
+
+    exact_match_str = sum(int(p == t) for p, t in zip(pred_strs, true_strs)) / len(true_strs)
+
+    log_dict = {
+        f"{prefix}_exact_match": exact_match,
+        f"{prefix}_exact_match_str": exact_match_str,
+        **tree_metrics,
+    }
+
+    return log_dict
+
 
 # Tree path scores
 
 
-def get_tree_path_metrics(pred_tokens, true_tokens, monitor_classes, prefix):
+def get_tree_path_metrics(pred_tokens, true_tokens, monitor_classes, prefix, do_each=False):
     """Get metrics for all classes, for monitor classes and for monitor_classes[0].
 
     Apply prefix to all keys.
@@ -178,43 +243,40 @@ def get_tree_path_metrics(pred_tokens, true_tokens, monitor_classes, prefix):
         true_tokens: List[List[str]]
         monitor_classes: List[str]
         prefix: str, will be appended to all return dict keys
+        do_each: bool, if False compute tree path metrics only for monitor_classes[0] and overall
+            if True compute tree path metrics for all monitor_classes and overall
 
     Returns:
         dictionary with keys
             {prefix}_{score_name}
             {prefix}_new_classes_{score_name}
-            {prefix}_{monitor_classes[0]}_{score_name}
+            cls/{prefix}_{monitor_classes[i]}_{score_name}, if do_each=False then i is only == 0
         for each score_name - key from get_tree_path_scores output dictionary
     """
 
     tree_path_scores = get_tree_path_scores(pred_tokens=pred_tokens, true_tokens=true_tokens)
     tree_path_scores = {f"{prefix}_{k}": v for k, v in tree_path_scores.items()}
 
-    tree_path_scores_new_cls = dict()
-    tree_path_scores_new_cls_main = dict()
     if monitor_classes is not None:
-        tree_path_scores_new_cls = get_tree_path_scores(
+        _new_classes_scores = get_tree_path_scores(
             pred_tokens=pred_tokens, true_tokens=true_tokens, classes=monitor_classes
         )
-        tree_path_scores_new_cls = {
-            f"{prefix}_new_classes_{k}": v for k, v in tree_path_scores_new_cls.items()
+        _new_classes_scores = {
+            f"{prefix}_new_classes_{k}": v for k, v in _new_classes_scores.items()
         }
+        tree_path_scores.update(_new_classes_scores)
 
-        _main_class = monitor_classes[0]
-        tree_path_scores_new_cls_main = get_tree_path_scores(
-            pred_tokens=pred_tokens, true_tokens=true_tokens, classes=[_main_class]
-        )
-        tree_path_scores_new_cls_main = {
-            f"{prefix}_{_main_class}_{k}": v for k, v in tree_path_scores_new_cls_main.items()
-        }
+        for i, class_ in enumerate(monitor_classes):
+            if i > 0 and not do_each:
+                break
 
-    tree_metrics = {
-        **tree_path_scores,
-        **tree_path_scores_new_cls,
-        **tree_path_scores_new_cls_main,
-    }
+            _class_score = get_tree_path_scores(
+                pred_tokens=pred_tokens, true_tokens=true_tokens, classes=[class_]
+            )
+            _class_score = {f"cls/{prefix}_{class_}_{k}": v for k, v in _class_score.items()}
+            tree_path_scores.update(_class_score)
 
-    return tree_metrics
+    return tree_path_scores
 
 
 def get_tree_path_scores(pred_tokens, true_tokens, classes=None):
@@ -272,52 +334,40 @@ def get_tree_path_scores(pred_tokens, true_tokens, classes=None):
         f1 = 2 * precision * recall / (precision + recall)
 
     return {
-        "predicted_paths": n_predicted,
-        "expected_paths": n_expected,
         "tree_path_precision": precision,
         "tree_path_recall": recall,
         "tree_path_f1": f1,
     }
 
 
-def _get_slot_paths(tree):
-    slot_paths = Counter()
+def _get_paths_with_values(tree) -> dict:
+    """Go over the tree and return all slot values with the slot names.
+
+    Slot names include paths to this slot. E.g. IN1.SL1: sl1_value.
+    Intents and slot without values have None as a value.
+
+    Args:
+        tree: Tree object
+    """
+    is_special = SL in tree.entity or IN in tree.entity
+    if not is_special:
+        return {}
+
+    if tree.subtrees is None:
+        return {tree.entity: None}
+
+    is_slot = SL in tree.entity
+    paths = {}
+
+    if is_slot:
+        paths[tree.entity] = tree.subtrees_to_tokens()
 
     for subtree in tree.subtrees:
-        is_slot = SL in subtree.entity
+        subpaths = _get_paths_with_values(subtree)
+        for path, value in subpaths.items():
+            paths[tree.entity + "." + path] = value
 
-        slot_name = subtree.entity[3:]
-
-        slot_subpaths = _get_slot_paths(subtree)
-
-        for slot_subname, freq in slot_subpaths.items():
-            if is_slot:
-                slot_paths[slot_name + "." + slot_subname] += 1
-            else:
-                slot_paths[slot_subname] += 1
-
-        if len(slot_subpaths) == 0 and is_slot:
-            slot_paths[slot_name] += 1
-
-    return slot_paths
-
-
-def _get_paths_with_values(tree):
-    slot_paths = dict()
-
-    for subtree in tree.subtrees:
-        slot_subpaths = _get_paths_with_values(subtree)
-
-        for slot_subname, value in slot_subpaths.items():
-            if value is None:
-                slot_paths[tree.entity] = slot_subname
-            else:
-                slot_paths[tree.entity + "." + slot_subname] = value
-
-    if len(tree.subtrees) == 0:
-        slot_paths = {tree.entity: None}
-
-    return slot_paths
+    return paths
 
 
 def _get_tree_path_matches(pred_tree_paths, true_tree_paths, classes=None):
@@ -382,3 +432,79 @@ def compute_metrics_from_batch(predictions, labels, masks, stop_tokens):
         "exact_match": exact_match,
         "first_intent_precision": first_intent_precision,
     }
+
+
+# Metrics used to evaluate finetuning procedure
+
+
+def get_outliers_metrics(
+    metric_names, initial_metrics, final_metrics, prefix, suffix, metric_weights
+):
+    """Get aggregate metrics evaluating the change of initial and final performance.
+
+    Metrics are summed with metric_weights for relative metrics and without weights for absolute metrics.
+    E.g., if metric_names is a list of positive outliers, this function computes Relative Improvemen
+    and the total metric increase on these classes.
+
+    Args:
+        metric_names: list of metrics to compute change on
+        initial_metrics: dict metric_name:metric_value
+        final_metrics: dict metric_name:metric_value
+        prefix: string used for naming, see Returns
+        suffix: string used for naming, see Returns
+        metric_weights: weights used to aggregate relative change
+
+    Returns:
+        dict with keys
+            {prefix}_outliers
+            absolute_{suffix}
+            relative_{suffix}
+    """
+    table = wandb.Table(
+        columns=[
+            "metric_name",
+            "pretrain_mean",
+            "pretrain_stdev",
+            "final_mean",
+            "final_stdev",
+            "absolute_improvement",
+            "relative_improvement",
+        ]
+    )
+
+    abs_deltas = {}
+    rel_deltas = {}
+    digits = 4
+
+    for name in metric_names:
+        abs_delta = final_metrics["means"][name] - initial_metrics["means"][name]
+        rel_delta = abs_delta / max(initial_metrics["means"][name], 0.001)
+        abs_deltas[name] = abs_delta
+        rel_deltas[name] = rel_delta
+
+        table.add_data(
+            name,
+            round(initial_metrics["means"][name], digits),
+            round(initial_metrics["stdevs"][name + "_std"], digits),
+            round(final_metrics["means"][name], digits),
+            round(final_metrics["stdevs"][name + "_std"], digits),
+            round(abs_delta, digits),
+            round(rel_delta, digits),
+        )
+
+    abs_delta_overall = 0
+    rel_delta_overall = 0
+
+    if len(abs_deltas) > 0:
+        abs_delta_overall = sum(abs_deltas.values())
+        rel_delta_overall = sum(metric_weights[name] * v for name, v in rel_deltas.items())
+
+        abs_delta_overall = round(abs_delta_overall, digits)
+        rel_delta_overall = round(rel_delta_overall, digits)
+
+    res = {
+        f"{prefix}_outliers": table,
+        f"absolute_{suffix}": abs_delta_overall,
+        f"relative_{suffix}": rel_delta_overall,
+    }
+    return res

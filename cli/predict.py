@@ -23,22 +23,19 @@ import os
 import sys
 import argparse
 import logging
-from typing import List
-from os.path import join as path_join
 
 import torch
 import transformers
 import pandas as pd
-from tqdm.auto import tqdm
 
-import new_semantic_parsing.data
-from new_semantic_parsing import (
-    EncoderDecoderWPointerModel,
-    TopSchemaTokenizer,
+from new_semantic_parsing import cli_utils
+from new_semantic_parsing import EncoderDecoderWPointerModel, TopSchemaTokenizer
+from new_semantic_parsing.data import (
+    make_dataset,
+    make_test_dataset,
+    Seq2SeqDataCollator,
+    PointerDataset,
 )
-from new_semantic_parsing.data import Seq2SeqDataCollator, PointerDataset
-from new_semantic_parsing import utils
-from cli.preprocess import make_dataset
 
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -50,31 +47,31 @@ logging.basicConfig(
     level=logging.INFO,
     stream=sys.stdout,
 )
-logger = logging.getLogger(__file__)
+logger = logging.getLogger(os.path.basename(__file__))
 
 
 def parse_args(args=None):
     parser = argparse.ArgumentParser()
 
     # fmt: off
-    parser.add_argument('--data', required=True, help='path to data file')
-    parser.add_argument('--model', required=True, help='path to a model checkpoint')
-    parser.add_argument('--output-file', required=True,
-                        help='file to save preprocessed data')
-    parser.add_argument('--schema-tokenizer', default=None,
-                        help='path to a saved tokenizer (note that schema tokenizer includes text tokenizer), '
-                             'by default --data/tokenizer is used')
-    parser.add_argument('--batch-size', default=32, type=int)
-    parser.add_argument('--num-beams', default=4, type=int)
-    parser.add_argument('--src-max-len', default=63, type=int,
-                        help='maximum length of the source sequence in tokens, '
-                             '63 for TOP train set and bert-base-cased tokenizer')
-    parser.add_argument('--tgt-max-len', default=98, type=int,
-                        help='maximum length of the target sequence in tokens, '
-                             '98 for TOP train set and bert-base-cased tokenizer')
-    parser.add_argument('--device', default=None,
-                        help='Use CUDA if available by default')
-    parser.add_argument('--seed', default=34, type=int)
+    parser.add_argument("--data", required=True, help="path to data file")
+    parser.add_argument("--model", required=True, help="path to a model checkpoint")
+    parser.add_argument("--output-file", required=True,
+                        help="file to save preprocessed data")
+    parser.add_argument("--schema-tokenizer", default=None,
+                        help="path to a saved tokenizer (note that schema tokenizer includes text tokenizer), "
+                             "by default --data/tokenizer is used")
+    parser.add_argument("--batch-size", default=32, type=int)
+    parser.add_argument("--num-beams", default=4, type=int)
+    parser.add_argument("--src-max-len", default=63, type=int,
+                        help="maximum length of the source sequence in tokens, "
+                             "63 for TOP train set and bert-base-cased tokenizer")
+    parser.add_argument("--tgt-max-len", default=98, type=int,
+                        help="maximum length of the target sequence in tokens, "
+                             "98 for TOP train set and bert-base-cased tokenizer")
+    parser.add_argument("--device", default=None,
+                        help="Use CUDA if available by default")
+    parser.add_argument("--seed", default=34, type=int)
     # fmt: on
 
     args = parser.parse_args(args)
@@ -99,7 +96,7 @@ if __name__ == "__main__":
     logger.info("Loading data")
 
     # NOTE: this dataset object does not have labels
-    dataset: PointerDataset = new_semantic_parsing.data.make_test_dataset(
+    dataset: PointerDataset = make_test_dataset(
         args.data, schema_tokenizer, max_len=args.src_max_len
     )
     dataloader = torch.utils.data.DataLoader(
@@ -114,7 +111,7 @@ if __name__ == "__main__":
     model = EncoderDecoderWPointerModel.from_pretrained(args.model).to(args.device)
     model.eval()
 
-    predictions_ids, predictions_str = utils.iterative_prediction(
+    predictions_ids, predictions_str = cli_utils.iterative_prediction(
         model=model,
         dataloader=dataloader,
         schema_tokenizer=schema_tokenizer,

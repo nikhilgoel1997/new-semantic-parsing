@@ -17,7 +17,7 @@ import unittest
 
 import torch
 
-import new_semantic_parsing.data
+import new_semantic_parsing as nsp
 from new_semantic_parsing import utils
 from new_semantic_parsing.dataclasses import InputDataClass
 
@@ -76,7 +76,7 @@ class Seq2SeqDataCollatorDatasetTest(unittest.TestCase):
             for i in range(bs)
         ]
 
-        collator = new_semantic_parsing.data.Seq2SeqDataCollator(e_pad, d_pad)
+        collator = nsp.data.Seq2SeqDataCollator(e_pad, d_pad)
 
         batch = collator.collate_batch(examples)
 
@@ -128,9 +128,7 @@ class PointerDatasetTest(unittest.TestCase):
             torch.tensor([0, 1, 1, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0]),
         ]
 
-        dataset = new_semantic_parsing.data.PointerDataset(
-            src_tensors, tgt_tensors, target_pointer_masks=tgt_masks
-        )
+        dataset = nsp.data.PointerDataset(src_tensors, tgt_tensors, target_pointer_masks=tgt_masks)
 
         item: InputDataClass = dataset[0]
 
@@ -151,7 +149,7 @@ class PointerDatasetTest(unittest.TestCase):
             for _ in range(10)
         ]
 
-        dataset = new_semantic_parsing.data.PointerDataset(src_tensors)
+        dataset = nsp.data.PointerDataset(src_tensors)
 
         item = dataset[0]
 
@@ -162,5 +160,27 @@ class PointerDatasetTest(unittest.TestCase):
         self.assertIsNone(item.labels)
 
     def test_len(self):
-        dataset = new_semantic_parsing.data.PointerDataset([None, None], [None, None], None)
+        dataset = nsp.data.PointerDataset([None, None], [None, None], None)
         self.assertEqual(len(dataset), 2)
+
+    def test_get_frequencies(self):
+        vocab = ["3", "4", "5"]  # + PAD, BOS, EOS
+        tokenizer = nsp.TopSchemaTokenizer(vocab, None)
+
+        # The test relies on this
+        assert tokenizer.pad_token_id == 0
+        assert tokenizer.bos_token_id == 1
+        assert tokenizer.eos_token_id == 2
+
+        tgt_tensors = [[1, 2, 3, 4, 100], [1, 101, 2, 3], [5, 100, 100], [3, 2]]
+        expected_frequencies = {
+            "3": 3 / 5.0,
+            "4": 1 / 5.0,
+            "5": 1 / 5.0,
+        }
+        dataset = nsp.PointerDataset(tgt_tensors, tgt_tensors)
+        dataset.torchify()
+
+        frequencies = dataset.get_class_frequencies(tokenizer)
+
+        self.assertDictEqual(frequencies, expected_frequencies)

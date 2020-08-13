@@ -13,14 +13,16 @@
 # limitations under the License.
 # =============================================================================
 """Elements of data feeding pipeline - torch Dataset and collator"""
+
+from collections import Counter
+
+import torch
 import numpy as np
 import pandas as pd
-import torch
-import torch.utils.data
 from tqdm.auto import tqdm
 
-from new_semantic_parsing.schema_tokenizer import TopSchemaTokenizer
 from new_semantic_parsing.dataclasses import InputDataClass, List, Tensor, PairItem
+from new_semantic_parsing.schema_tokenizer import TopSchemaTokenizer
 from new_semantic_parsing.utils import get_src_pointer_mask, make_subset
 
 
@@ -31,7 +33,6 @@ class PointerDataset(torch.utils.data.Dataset):
         target_tensors=None,
         source_pointer_masks=None,
         target_pointer_masks=None,
-        fp16=False,
     ):
         """Stores tensors and makes labels as shifted target_tensors.
 
@@ -41,7 +42,6 @@ class PointerDataset(torch.utils.data.Dataset):
             source_pointer_masks: list of tensors, mask for the pointer network
                 does not allow to point to padding, cls and sep
             target_pointer_masks: list of tensors, mask showing pointer locations in labels
-            fp16: convert data to 16bit when indexing
         """
         self.source_tensors = source_tensors
         self.target_tensors = target_tensors
@@ -51,7 +51,6 @@ class PointerDataset(torch.utils.data.Dataset):
         if source_tensors is None:
             raise ValueError("source_tensors cannot be None")
 
-        self.fp16 = fp16
         self.torchified = all(
             map(
                 self._check_torchified,
@@ -81,8 +80,6 @@ class PointerDataset(torch.utils.data.Dataset):
         source_pointer_mask = None
         if self.source_pointer_masks is not None:
             source_pointer_mask = self.source_pointer_masks[item]
-            if self.fp16:
-                source_pointer_mask = source_pointer_mask.half()
 
         if self.target_tensors is None:
             return InputDataClass(
@@ -92,8 +89,6 @@ class PointerDataset(torch.utils.data.Dataset):
         target_pointer_mask = None
         if self.target_pointer_masks is not None:
             target_pointer_mask = self.target_pointer_masks[item][:-1]
-            if self.fp16:
-                target_pointer_mask = target_pointer_mask.half()
 
         return InputDataClass(
             input_ids=self.source_tensors[item],
@@ -136,6 +131,23 @@ class PointerDataset(torch.utils.data.Dataset):
 
         target_max_len = max(len(t) for t in self.target_tensors)
         return source_max_len, target_max_len
+
+    def get_class_frequencies(self, schema_tokenizer: TopSchemaTokenizer):
+        """Get frequencies of each schema token"""
+        if self.target_tensors is None:
+            raise RuntimeError(".get_class_frequencies was called on the dataset with no labels")
+
+        counts = Counter()
+        for example in self.target_tensors:
+            schema_tokens = [i for i in example.tolist() if schema_tokenizer.is_schema_token_id(i)]
+            counts.update(schema_tokens)
+
+        total_count = sum(counts.values())
+        frequencies = {
+            schema_tokenizer.index2token(i): count / total_count for i, count in counts.items()
+        }
+
+        return frequencies
 
 
 class Seq2SeqDataCollator:

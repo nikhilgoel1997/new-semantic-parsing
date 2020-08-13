@@ -490,7 +490,7 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
 
         for n, p1 in self.named_parameters():
             p2 = self.initial_params[n]
-            norm += torch.dist(p1, p2, p=2)
+            norm += torch.dist(p1, p2, p=self.config.move_norm_p)
 
         norm /= len(self.initial_params)
         return norm

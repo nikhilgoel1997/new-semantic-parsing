@@ -28,12 +28,8 @@ import pandas as pd
 
 import transformers
 
-import new_semantic_parsing.data
-from new_semantic_parsing import (
-    utils,
-    TopSchemaTokenizer,
-    SAVE_FORMAT_VERSION,
-)
+import new_semantic_parsing as nsp
+from new_semantic_parsing import utils
 
 
 logging.basicConfig(
@@ -42,7 +38,7 @@ logging.basicConfig(
     level=logging.INFO,
     stream=sys.stdout,
 )
-logger = logging.getLogger(__file__)
+logger = logging.getLogger(os.path.basename(__file__))
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -50,20 +46,20 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 def parse_args(args=None):
     parser = argparse.ArgumentParser()
     # fmt: off
-    parser.add_argument('--data', required=True,
-                        help='path to TOP dataset directory')
-    parser.add_argument('--text-tokenizer', required=True,
-                        help='pratrained tokenizer name or path to a saved tokenizer')
-    parser.add_argument('--output-dir', required=True,
-                        help='directory to save preprocessed data')
-    parser.add_argument('--seed', default=34)
+    parser.add_argument("--data", required=True,
+                        help="path to TOP dataset directory")
+    parser.add_argument("--text-tokenizer", required=True,
+                        help="pratrained tokenizer name or path to a saved tokenizer")
+    parser.add_argument("--output-dir", required=True,
+                        help="directory to save preprocessed data")
+    parser.add_argument("--seed", default=34)
 
     # splitting parameters
-    parser.add_argument('--split-class', default=None,
-                        help='remove --split-ratio of the class from the training dataset and make a finetune_data; '
-                             'do not perform split by default')
-    parser.add_argument('--split-amount', default=None, type=float,
-                        help='0 < --split-amount < 1, amount of data to remove from the training dataset')
+    parser.add_argument("--split-class", default=None,
+                        help="remove --split-ratio of the class from the training dataset and make a finetune_data; "
+                             "do not perform split by default")
+    parser.add_argument("--split-amount", default=None, type=float,
+                        help="0 < --split-amount < 1, amount of data to remove from the training dataset")
     # fmt: on
 
     args = parser.parse_args(args)
@@ -77,6 +73,51 @@ def parse_args(args=None):
             raise ValueError("--split-amount should be specified if --split-class is provided")
 
     return args
+
+
+def train_finetune_split(train_data, schema_vocab, split_amount, split_class=None):
+    """Split train_data into train and finetune parts with ratio split_amount.
+
+    Train part should contain all classses from the original train_data.
+    If split_class is provided, split across examples containing this class.
+    E.i. split_amount of data with split_class goes to finetune set.
+
+    Args:
+        train_data: pd.DataFrame
+        schema_vocab: set of tokens
+        split_amount: float
+        split_class: if provided, split across the specified class
+    """
+    # Get a small set of examples that contains all classes from schema_vocab
+    required_example_ids = utils.get_required_example_ids(schema_vocab, train_data)
+
+    ids = set(range(len(train_data)))
+    if split_class is not None:
+        ids = set(train_data.index[train_data.schema.str.contains(split_class)])
+        logger.info(f"Moving {100 * split_amount}% of {split_class} into a finetuning subset")
+
+    split_ids = list(ids - required_example_ids)
+
+    take = int(len(split_ids) * split_amount)
+    leave = len(train_data) - take
+
+    assert take > 0
+
+    logger.info(f"Taking {take} examples and leaving {leave} examples")
+
+    shuffle(split_ids)
+    subset_ids = split_ids[:take]
+
+    subset_ids_set = set(subset_ids)
+    all_ids = set(range(len(train_data)))
+
+    assert len(subset_ids_set.intersection(required_example_ids)) == 0
+    train_data_ids = list(all_ids - subset_ids_set | required_example_ids)
+
+    finetune_data = train_data.iloc[subset_ids]
+    train_data = train_data.iloc[train_data_ids]
+
+    return train_data, finetune_data
 
 
 def main(args):
@@ -95,36 +136,11 @@ def main(args):
     schema_vocab = reduce(set.union, map(utils.get_vocab_top_schema, train_data.schema))
 
     if args.split_amount is not None:
-        # NOTE: this is not train/eval split, this is train/finetune split
         # finetune part is not used by train script, but used by retrain script
-
-        # Get a small set of examples that contains all classes from schema_vocab
-        required_example_ids = utils.get_required_example_ids(schema_vocab, train_data)
-
         logger.info("Splitting the training dataset")
-        split_ids = list(set(range(len(train_data))) - required_example_ids)
-
-        if args.split_class is not None:
-            split_ids = [
-                i for i, schema in enumerate(train_data.schema) if args.split_class in schema
-            ]
-            logger.info(
-                f"Moving {100 * args.split_amount}% of {args.split_class} into a finetuning subset"
-            )
-
-        take = int(len(split_ids) * args.split_amount)
-        leave = len(split_ids) - take
-
-        assert take > 0
-
-        logger.info(f"Taking {take} examples and leaving {leave} examples")
-
-        shuffle(split_ids)
-        subset_ids = split_ids[:take]
-        train_data_ids = list(set(range(len(train_data))) - set(subset_ids) | required_example_ids)
-
-        finetune_data = train_data.iloc[subset_ids]
-        train_data = train_data.iloc[train_data_ids]
+        train_data, finetune_data = train_finetune_split(
+            train_data, schema_vocab, args.split_amount, args.split_class
+        )
 
         os.makedirs(args.output_dir)
 
@@ -153,23 +169,19 @@ def main(args):
 
     logger.info("Building tokenizers")
     text_tokenizer = transformers.AutoTokenizer.from_pretrained(args.text_tokenizer, use_fast=True)
-    schema_tokenizer = TopSchemaTokenizer(schema_vocab, text_tokenizer)
+    schema_tokenizer = nsp.TopSchemaTokenizer(schema_vocab, text_tokenizer)
 
     logger.info("Tokenizing train dataset")
-    train_dataset = new_semantic_parsing.data.make_dataset(train_path, schema_tokenizer)
+    train_dataset = nsp.data.make_dataset(train_path, schema_tokenizer)
 
     logger.info("Tokenizing validation and test datasets")
-    valid_dataset = new_semantic_parsing.data.make_dataset(
-        path_join(args.data, "eval.tsv"), schema_tokenizer
-    )
-    test_dataset = new_semantic_parsing.data.make_dataset(
-        path_join(args.data, "test.tsv"), schema_tokenizer
-    )
+    valid_dataset = nsp.data.make_dataset(path_join(args.data, "eval.tsv"), schema_tokenizer)
+    test_dataset = nsp.data.make_dataset(path_join(args.data, "test.tsv"), schema_tokenizer)
 
     finetune_dataset = None
     if args.split_amount is not None:
         logger.info("Tokenizing finetune set")
-        finetune_dataset = new_semantic_parsing.data.make_dataset(finetune_path, schema_tokenizer)
+        finetune_dataset = nsp.data.make_dataset(finetune_path, schema_tokenizer)
 
         logger.info(f"Original train set size: {full_train_data_size}")
         logger.info(f"Reduced  train set size: {len(train_dataset)}")
@@ -183,7 +195,7 @@ def main(args):
     os.makedirs(args.output_dir, exist_ok=True)
 
     with open(path_join(args.output_dir, "args.toml"), "w") as f:
-        args_dict = {"version": SAVE_FORMAT_VERSION, **vars(args)}
+        args_dict = {"version": nsp.SAVE_FORMAT_VERSION, **vars(args)}
         toml.dump(args_dict, f)
 
     # text tokenizer is saved along with schema_tokenizer
@@ -198,7 +210,7 @@ def main(args):
         "valid_dataset": valid_dataset,
         "test_dataset": test_dataset,
         "finetune_dataset": finetune_dataset,
-        "version": SAVE_FORMAT_VERSION,
+        "version": nsp.SAVE_FORMAT_VERSION,
     }
 
     torch.save(data_state, path_join(args.output_dir, "data.pkl"))

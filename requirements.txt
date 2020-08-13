@@ -7,3 +7,4 @@ toml
 wandb
 pre-commit
 pytorch-lightning==0.8.5
+tqdm

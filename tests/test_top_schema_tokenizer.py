@@ -150,7 +150,7 @@ class TopSchemaTokenizerTest(unittest.TestCase):
         with patch_tok_load, patch_config_load:
             loaded_tokenizer = TopSchemaTokenizer.load(self.tmpdirname)
 
-        self.assertSetEqual(set(loaded_tokenizer._vocab), set(tokenizer._vocab))
+        self.assertSetEqual(set(loaded_tokenizer.vocab), set(tokenizer.vocab))
 
         new_ids = loaded_tokenizer.encode(schema_str, source_tokens)
         self.assertSequenceEqual(ids, new_ids)

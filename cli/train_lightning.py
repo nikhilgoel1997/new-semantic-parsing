@@ -12,38 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # =============================================================================
-"""Train the model using preprocessed (binary) data and save the model and tokenizer into a directory.
+"""Train the model using preprocessed (binary) data and save the model and tokenizer into a directory."""
 
-Uses Lightning, largely copies train.py.
-The code is not shared for easier modification while supporting backcompatibility with train.py.
-"""
-
+import argparse
+import logging
+import pprint
 import os
 import sys
-import logging
 import tempfile
-import argparse
 from os.path import join as path_join
 
 import toml
 import torch
-import wandb
 import transformers
-import pandas as pd
+import wandb
+import pytorch_lightning as pl
 
-from pytorch_lightning import Trainer
-from pytorch_lightning import callbacks
-from pytorch_lightning.loggers import WandbLogger
+import new_semantic_parsing as nsp
+import new_semantic_parsing.callbacks
 
-from new_semantic_parsing import (
-    EncoderDecoderWPointerModel,
-    TopSchemaTokenizer,
-)
-from new_semantic_parsing import utils, SAVE_FORMAT_VERSION
-from new_semantic_parsing.data import PointerDataset, Seq2SeqDataCollator
-from new_semantic_parsing.callbacks import TransformersModelCheckpoint
-from new_semantic_parsing.dataclasses import EncDecFreezingSchedule
-from new_semantic_parsing.lightning_module import PointerModule
+from new_semantic_parsing import utils, cli_utils
 
 
 logging.basicConfig(
@@ -52,7 +40,8 @@ logging.basicConfig(
     level=logging.INFO,
     stream=sys.stdout,
 )
-logger = logging.getLogger(__file__)
+logger = logging.getLogger(os.path.basename(__file__))
+logging.getLogger("transformers.configuration_utils").setLevel(logging.WARNING)
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -63,87 +52,90 @@ def parse_args(args=None):
     # fmt: off
 
     # data
-    parser.add_argument('--data-dir', required=True,
-                        help='Path to preprocess.py --save-dir containing tokenizer, '
-                             'data.pkl, and args.toml')
-    parser.add_argument('--output-dir', default=None,
-                        help='directory to store checkpoints and other output files')
-    parser.add_argument('--eval-data-amount', default=0.7, type=float,
-                        help='amount of validation set to use when training. '
-                             'The final evaluation will use the full dataset.')
-    parser.add_argument('--new-classes-file', default=None,
-                        help='path to a text file with names of classes to track, one class per line')
+    parser.add_argument("--data-dir", required=True,
+                        help="Path to preprocess.py --save-dir containing tokenizer, "
+                             "data.pkl, and args.toml")
+    parser.add_argument("--output-dir", default=None,
+                        help="directory to store checkpoints and other output files")
+    parser.add_argument("--eval-data-amount", default=1.0, type=float,
+                        help="amount of validation set to use when training. "
+                             "The final evaluation will use the full dataset.")
+    parser.add_argument("--new-classes-file", default=None,
+                        help="path to a text file with names of classes to track, one class per line")
 
     # model
-    parser.add_argument('--encoder-model', default=None,
-                        help='pretrained model name, e.g. bert-base-uncased')
-    parser.add_argument('--layers', default=None, type=int,
-                        help='number of layers in the encoder. '
-                             'Only used if --encoder-model is not provided.')
-    parser.add_argument('--hidden', default=None, type=int,
-                        help='hidden size of the encoder. '
-                             'Only used if --encoder-model is not provided.')
-    parser.add_argument('--heads', default=None, type=int,
-                        help='hidden size of the encoder. '
-                             'Only used if --encoder-model is not provided.')
-    parser.add_argument('--decoder-layers', default=None, type=int,
-                        help='number of layers in the decoder. '
-                             'Equal to the number of the encoder layers by default')
-    parser.add_argument('--decoder-hidden', default=None, type=int,
-                        help='hidden size of the decoder. '
-                             'Equal to the hidden side of the encoder by default')
-    parser.add_argument('--decoder-heads', default=None, type=int,
-                        help='hidden size of the decoder. '
-                             'Equal to the number of the encoder heads by default')
+    parser.add_argument("--encoder-model", default=None,
+                        help="pretrained model name, e.g. bert-base-uncased")
+    parser.add_argument("--layers", default=None, type=int,
+                        help="number of layers in the encoder. "
+                             "Only used if --encoder-model is not provided.")
+    parser.add_argument("--hidden", default=None, type=int,
+                        help="hidden size of the encoder. "
+                             "Only used if --encoder-model is not provided.")
+    parser.add_argument("--heads", default=None, type=int,
+                        help="hidden size of the encoder. "
+                             "Only used if --encoder-model is not provided.")
+    parser.add_argument("--decoder-layers", default=None, type=int,
+                        help="number of layers in the decoder. "
+                             "Equal to the number of the encoder layers by default")
+    parser.add_argument("--decoder-hidden", default=None, type=int,
+                        help="hidden size of the decoder. "
+                             "Equal to the hidden side of the encoder by default")
+    parser.add_argument("--decoder-heads", default=None, type=int,
+                        help="hidden size of the decoder. "
+                             "Equal to the number of the encoder heads by default")
 
     # model architecture changes
-    parser.add_argument('--use-pointer-bias', default=False, action='store_true',
-                        help='Use bias in pointer network')
+    parser.add_argument("--use-pointer-bias", default=False, action="store_true",
+                        help="Use bias in pointer network")
 
     # training
-    parser.add_argument('--epochs', default=1, type=int)
-    parser.add_argument('--early-stopping', default=None, type=int,
-                        help='Lightning-only. Early stopping patience. No early stopping by default.')
-    parser.add_argument('--min-epochs', default=1, type=int)
-    parser.add_argument('--seed', default=1, type=int)
-    parser.add_argument('--lr', default=None, type=float,
-                        help='By default, lr is chosen according to the Scaling Laws for Neural Language Models')
-    parser.add_argument('--encoder-lr', default=None, type=float,
-                        help='Encoder learning rate, overrides --lr')
-    parser.add_argument('--decoder-lr', default=None, type=float,
-                        help='Decoder learning rate, overrides --lr')
-    parser.add_argument('--weight-decay', default=0, type=float)
-    parser.add_argument('--dropout', default=0.1, type=float,
-                        help='dropout amount for the encoder, decoder and head, default value 0.1 is from Transformers')
-    parser.add_argument('--warmup-steps', default=1, type=int)
-    parser.add_argument('--gradient-accumulation-steps', default=1, type=int)
-    parser.add_argument('--batch-size', default=64, type=int)
-    parser.add_argument('--max-grad-norm', default=1.0, type=float)
-    parser.add_argument('--label-smoothing', default=0.1, type=float)
+    parser.add_argument("--epochs", default=1, type=int)
+    parser.add_argument("--min-epochs", default=1, type=int)
+    parser.add_argument("--max-steps", default=None, type=int)
+    parser.add_argument("--min-steps", default=None, type=int)
+    parser.add_argument("--early-stopping", default=None, type=int,
+                        help="Lightning-only. Early stopping patience. No early stopping by default.")
+
+    parser.add_argument("--seed", default=1, type=int)
+    parser.add_argument("--lr", default=None, type=float,
+                        help="By default, lr is chosen according to the Scaling Laws for Neural Language Models")
+    parser.add_argument("--encoder-lr", default=None, type=float,
+                        help="Encoder learning rate, overrides --lr")
+    parser.add_argument("--decoder-lr", default=None, type=float,
+                        help="Decoder learning rate, overrides --lr")
+
+    parser.add_argument("--weight-decay", default=0, type=float)
+    parser.add_argument("--dropout", default=0.1, type=float,
+                        help="dropout amount for the encoder, decoder and head, default value 0.1 is from Transformers")
+    parser.add_argument("--warmup-steps", default=1, type=int)
+    parser.add_argument("--gradient-accumulation-steps", default=1, type=int)
+    parser.add_argument("--batch-size", default=64, type=int)
+    parser.add_argument("--max-grad-norm", default=1.0, type=float)
+    parser.add_argument("--label-smoothing", default=0.1, type=float)
 
     # --- freezing
-    parser.add_argument('--freeze-encoder', default=None, type=int,
-                        help='step to freeze encoder')
-    parser.add_argument('--unfreeze-encoder', default=None, type=int,
-                        help='step to unfreeze encoder')
-    parser.add_argument('--freeze-decoder', default=None, type=int,
-                        help='step to freeze decoder')
-    parser.add_argument('--unfreeze-decoder', default=None, type=int,
-                        help='step to unfreeze decoder')
-    parser.add_argument('--freeze-head', default=None, type=int,
-                        help='step to freeze head')
-    parser.add_argument('--unfreeze-head', default=None, type=int,
-                        help='step to unfreeze head')
+    parser.add_argument("--freeze-encoder", default=None, type=int,
+                        help="step to freeze encoder")
+    parser.add_argument("--unfreeze-encoder", default=None, type=int,
+                        help="step to unfreeze encoder")
+    parser.add_argument("--freeze-decoder", default=None, type=int,
+                        help="step to freeze decoder")
+    parser.add_argument("--unfreeze-decoder", default=None, type=int,
+                        help="step to unfreeze decoder")
+    parser.add_argument("--freeze-head", default=None, type=int,
+                        help="step to freeze head")
+    parser.add_argument("--unfreeze-head", default=None, type=int,
+                        help="step to unfreeze head")
 
     # misc
-    parser.add_argument('--wandb-project', default=None)
-    parser.add_argument('--log-every', default=100, type=int)
-    parser.add_argument('--tags', default=None)
-    parser.add_argument('--fp16', default=False, action='store_true')
-    parser.add_argument('--gpus', default=None, type=int,
-                        help='Lightning-only. Number of gpus to train the model on')
-    parser.add_argument('--split-amount-finetune', default=None, type=float,
-                        help='Only used for logging, amount of data that was removed from the training set')
+    parser.add_argument("--wandb-project", default=None)
+    parser.add_argument("--log-every", default=100, type=int)
+    parser.add_argument("--tags", default=None)
+    parser.add_argument("--gpus", default=None, type=int,
+                        help="Lightning-only. Number of gpus to train the model on")
+    parser.add_argument("--split-amount-finetune", default=None, type=float,
+                        help="Only used for logging, amount of data that was removed from the training set")
 
     # fmt: on
 
@@ -152,6 +144,9 @@ def parse_args(args=None):
     # set defaults for None fields
     if (args.encoder_lr is not None) ^ (args.decoder_lr is not None):
         raise ValueError("--encoder-lr and --decoder-lr should be both specified")
+
+    if args.encoder_lr is not None:
+        args.lr = {"encoder_lr": args.encoder_lr, "decoder_lr": args.decoder_lr}
 
     args.decoder_layers = args.decoder_layers or args.layers
     args.decoder_hidden = args.decoder_hidden or args.hidden
@@ -171,143 +166,97 @@ def parse_args(args=None):
     return args
 
 
-def main(args):
-    utils.set_seed(args.seed)
+def make_model(schema_tokenizer, max_src_len, args, preprocess_args=None):
+    """Initialize a model.
+    If args.encoder_model is specified, use it to load a pretrained encoder model.
 
-    wandb_logger = WandbLogger(project=args.wandb_project, tags=args.tags)
-    wandb_logger.log_hyperparams(args)
+    Args:
+        schema_tokenizer: TopSchemaTokenizer
+        max_src_len: int, maximum length of the source sequence in BPE tokens
+        args: argparse object from parse_args()
+        preprocess_args: (optional) dict, used to check the tokenizer used for preprocessing
 
-    if os.path.exists(args.output_dir):
-        raise ValueError(f"output_dir {args.output_dir} already exists")
-
-    logger.info("Loading tokenizers")
-    schema_tokenizer = TopSchemaTokenizer.load(path_join(args.data_dir, "tokenizer"))
-    text_tokenizer: transformers.PreTrainedTokenizer = schema_tokenizer.src_tokenizer
-
-    logger.info("Loading data")
-    datasets = torch.load(path_join(args.data_dir, "data.pkl"))
-    train_dataset: PointerDataset = datasets["train_dataset"]
-    eval_dataset: PointerDataset = datasets["valid_dataset"]
-
-    if args.fp16:
-        train_dataset.fp16 = True
-        eval_dataset.fp16 = True
-
-    max_src_len, _ = train_dataset.get_max_len()
-
-    try:
-        with open(path_join(args.data_dir, "args.toml")) as f:
-            preprocess_args = toml.load(f)
-            if preprocess_args["version"] != SAVE_FORMAT_VERSION:
-                logger.warning(
-                    "Binary data version differs from the current version. "
-                    "May cause failing and unexpected behavior"
-                )
-            wandb.config.update({"preprocess_" + k: v for k, v in preprocess_args.items()})
-
-    except FileNotFoundError:
-        preprocess_args = None
-
-    logger.info("Creating a model")
-    if args.encoder_model:
-        if preprocess_args is not None and preprocess_args["text_tokenizer"] != args.encoder_model:
-            logger.warning("Data may have been preprocessed with a different tokenizer")
-            logger.warning(f'Preprocessing tokenizer     : {preprocess_args["text_tokenizer"]}')
-            logger.warning(f"Pretrained encoder tokenizer: {args.encoder_model}")
-
-        encoder_config = transformers.AutoConfig.from_pretrained(args.encoder_model)
-        encoder_config.hidden_dropout_prob = args.dropout
-        encoder_config.attention_probs_dropout_prob = args.dropout
-
-        encoder = transformers.AutoModel.from_pretrained(args.encoder_model, config=encoder_config)
-
-        if encoder.config.vocab_size != text_tokenizer.vocab_size:
-            raise ValueError("Preprocessing tokenizer and model tokenizer are not compatible")
-
-        ffn_hidden = 4 * args.decoder_hidden if args.decoder_hidden is not None else None
-
-        decoder_config = transformers.BertConfig(
-            is_decoder=True,
-            vocab_size=schema_tokenizer.vocab_size + max_src_len,
-            hidden_size=args.decoder_hidden or encoder.config.hidden_size,
-            intermediate_size=ffn_hidden or encoder.config.intermediate_size,
-            num_hidden_layers=args.decoder_layers or encoder.config.num_hidden_layers,
-            num_attention_heads=args.decoder_heads or encoder.config.num_attention_heads,
-            pad_token_id=schema_tokenizer.pad_token_id,
-            hidden_dropout_prob=args.dropout,
-            attention_probs_dropout_prob=args.dropout,
-        )
-        decoder = transformers.BertModel(decoder_config)
-
-        model = EncoderDecoderWPointerModel(
-            encoder=encoder,
-            decoder=decoder,
-            max_src_len=max_src_len,
-            dropout=args.dropout,
-            model_args=args,
-        )
-
-    else:  # if args.encoder_model is not specified
-        model = EncoderDecoderWPointerModel.from_parameters(
+    Returns:
+        EncoderDecoderWPointerModel
+    """
+    if not args.encoder_model:
+        # initialize the model from scratch
+        model = nsp.EncoderDecoderWPointerModel.from_parameters(
             layers=args.layers,
             hidden=args.hidden,
             heads=args.heads,
             decoder_layers=args.decoder_layers,
             decoder_hidden=args.decoder_hidden,
             decoder_heads=args.decoder_heads,
-            src_vocab_size=text_tokenizer.vocab_size,
+            src_vocab_size=schema_tokenizer.src_tokenizer.vocab_size,
             tgt_vocab_size=schema_tokenizer.vocab_size,
-            encoder_pad_token_id=text_tokenizer.pad_token_id,
+            encoder_pad_token_id=schema_tokenizer.src_tokenizer.pad_token_id,
             decoder_pad_token_id=schema_tokenizer.pad_token_id,
             max_src_len=max_src_len,
             dropout=args.dropout,
             model_args=args,
         )
+        return model
 
-    new_classes = None
-    if args.new_classes_file is not None:
-        with open(args.new_classes_file) as f:
-            new_classes = f.read().strip().split("\n")
-            wandb_logger.log_hyperparams({"new_classes": " ".join(new_classes)})
+    # use a pretrained model as an encoder
 
-    logger.info("Starting training")
-    lr = args.lr or utils.get_lr(model)
+    if preprocess_args is not None and preprocess_args["text_tokenizer"] != args.encoder_model:
+        logger.warning("Data may have been preprocessed with a different tokenizer")
+        logger.warning(f'Preprocessing tokenizer     : {preprocess_args["text_tokenizer"]}')
+        logger.warning(f"Pretrained encoder tokenizer: {args.encoder_model}")
 
-    if args.encoder_lr is not None and args.decoder_lr is not None:
-        lr = {"encoder_lr": args.encoder_lr, "decoder_lr": args.decoder_lr}
+    encoder_config = transformers.AutoConfig.from_pretrained(args.encoder_model)
+    encoder_config.hidden_dropout_prob = args.dropout
+    encoder_config.attention_probs_dropout_prob = args.dropout
 
-    adam_eps = 1e-7 if args.fp16 else 1e-9
+    encoder = transformers.AutoModel.from_pretrained(args.encoder_model, config=encoder_config)
 
-    freezing_schedule = EncDecFreezingSchedule.from_args(args)
+    if encoder.config.vocab_size != schema_tokenizer.src_tokenizer.vocab_size:
+        raise ValueError("Preprocessing tokenizer and model tokenizer are not compatible")
 
-    wandb_logger.log_hyperparams({"num_data": len(train_dataset)})
+    ffn_hidden = 4 * args.decoder_hidden if args.decoder_hidden is not None else None
 
-    lightning_module = PointerModule(
-        model=model,
-        schema_tokenizer=schema_tokenizer,
-        train_dataset=train_dataset,
-        valid_dataset=eval_dataset,
-        lr=lr,
-        batch_size=args.batch_size,
-        warmup_steps=args.warmup_steps,
-        weight_decay=args.weight_decay,
-        adam_eps=adam_eps,
-        log_every=args.log_every,
-        monitor_classes=new_classes,
-        freezing_schedule=freezing_schedule,
+    decoder_config = transformers.BertConfig(
+        is_decoder=True,
+        vocab_size=schema_tokenizer.vocab_size + max_src_len,
+        hidden_size=args.decoder_hidden or encoder.config.hidden_size,
+        intermediate_size=ffn_hidden or encoder.config.intermediate_size,
+        num_hidden_layers=args.decoder_layers or encoder.config.num_hidden_layers,
+        num_attention_heads=args.decoder_heads or encoder.config.num_attention_heads,
+        pad_token_id=schema_tokenizer.pad_token_id,
+        hidden_dropout_prob=args.dropout,
+        attention_probs_dropout_prob=args.dropout,
+    )
+    decoder = transformers.BertModel(decoder_config)
+
+    model = nsp.EncoderDecoderWPointerModel(
+        encoder=encoder,
+        decoder=decoder,
+        max_src_len=max_src_len,
+        dropout=args.dropout,
+        model_args=args,
     )
 
-    wandb_logger.watch(lightning_module, log="all", log_freq=args.log_every)
+    return model
 
+
+def make_trainer(args, wandb_logger):
+    """Make lightning Trainer with callbacks for checkpointing, early stopping and lr logging.
+
+    Args:
+        args: argparse object from parse_args()
+        wandb_logger: lightning WandbLogger object
+    """
     # there is a werid bug that checkpoint_callback creates checkpoints
     # in the filepath subfolder, e.g. if you specify filepath=output_dir
     # the checkpoints will be created in output_dir/..
     # NOTE: we need save_top_k=1 fot checkpoint_callback.last_checkpoint_path
     # to point to the best model
-    checkpoint_callback = TransformersModelCheckpoint(
+
+    checkpoint_callback = nsp.callbacks.TransformersModelCheckpoint(
         filepath=path_join(args.output_dir, "pl_checkpoint.ckpt"),
         save_top_k=1,
-        verbose=True,
+        verbose=False,
         monitor="eval_exact_match",
         mode="max",
         prefix="",
@@ -315,7 +264,7 @@ def main(args):
 
     early_stopping = False
     if args.early_stopping is not None:
-        early_stopping = callbacks.EarlyStopping(
+        early_stopping = pl.callbacks.EarlyStopping(
             monitor="eval_exact_match",
             patience=args.early_stopping,
             strict=False,
@@ -323,110 +272,116 @@ def main(args):
             mode="max",
         )
 
-    lr_logger = callbacks.LearningRateLogger()
+    lr_logger = pl.callbacks.LearningRateLogger()
 
-    trainer = Trainer(
+    trainer = pl.Trainer(
         logger=wandb_logger,
         max_epochs=args.epochs,
+        min_epochs=args.min_epochs,
+        max_steps=args.max_steps,
+        min_steps=args.min_steps,
         gpus=args.gpus,
         accumulate_grad_batches=args.gradient_accumulation_steps,
         checkpoint_callback=checkpoint_callback,
         early_stop_callback=early_stopping,
         gradient_clip_val=args.max_grad_norm,
-        precision=16 if args.fp16 else 32,
-        row_log_interval=args.log_every,
+        row_log_interval=1,
         limit_val_batches=args.eval_data_amount,
         callbacks=[lr_logger],
-        min_epochs=args.min_epochs,
+    )
+    return trainer
+
+
+def main(args):
+    utils.set_seed(args.seed)
+
+    wandb_logger = pl.loggers.WandbLogger(project=args.wandb_project, tags=args.tags)
+    wandb_logger.log_hyperparams(args)
+
+    logger.info(f"Starting training with args: \n{pprint.pformat(vars(args))}")
+
+    if os.path.exists(args.output_dir):
+        raise ValueError(f"output_dir {args.output_dir} already exists")
+
+    logger.info("Loading tokenizers")
+    schema_tokenizer = nsp.TopSchemaTokenizer.load(path_join(args.data_dir, "tokenizer"))
+
+    logger.info("Loading data")
+    datasets = torch.load(path_join(args.data_dir, "data.pkl"))
+    train_dataset: nsp.PointerDataset = datasets["train_dataset"]
+    eval_dataset: nsp.PointerDataset = datasets["valid_dataset"]
+
+    max_src_len, _ = train_dataset.get_max_len()
+
+    try:
+        preprocess_args = cli_utils.load_saved_args(path_join(args.data_dir, "args.toml"))
+        wandb.config.update({"preprocess_" + k: v for k, v in preprocess_args.items()})
+
+    except FileNotFoundError:
+        preprocess_args = None
+
+    logger.info("Creating a model")
+    model = make_model(schema_tokenizer, max_src_len, args, preprocess_args)
+
+    logger.info("Preparing for training")
+
+    new_classes = None
+    if args.new_classes_file is not None:
+        with open(args.new_classes_file) as f:
+            new_classes = f.read().strip().split("\n")
+            wandb_logger.log_hyperparams({"new_classes": " ".join(new_classes)})
+
+    freezing_schedule = nsp.dataclasses.EncDecFreezingSchedule.from_args(args)
+
+    wandb_logger.log_hyperparams({"num_data": len(train_dataset)})
+
+    lightning_module = nsp.PointerModule(
+        model=model,
+        schema_tokenizer=schema_tokenizer,
+        train_dataset=train_dataset,
+        valid_dataset=eval_dataset,
+        lr=args.lr,
+        batch_size=args.batch_size,
+        warmup_steps=args.warmup_steps,
+        weight_decay=args.weight_decay,
+        log_every=args.log_every,
+        monitor_classes=new_classes,
+        freezing_schedule=freezing_schedule,
     )
 
+    wandb_logger.watch(lightning_module, log="all", log_freq=args.log_every)
+
+    trainer = make_trainer(args, wandb_logger)
+
     # --- FIT
-    utils.check_config(lightning_module, trainer, args)
+    cli_utils.check_config(lightning_module, trainer, args)
 
     trainer.fit(lightning_module)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    logger.info("Training finished!")
 
     # top_k == 1 --> the last checkpoint is the best model
-    assert checkpoint_callback.save_top_k == 1
-    best_model_dir = os.path.dirname(checkpoint_callback.last_checkpoint_path)
-    model = EncoderDecoderWPointerModel.from_pretrained(best_model_dir)
-    model = model.to(device)
+    assert trainer.checkpoint_callback.save_top_k == 1
+    logger.info(f"Loading and evaluating the best model")
+
+    final_metrics, description = cli_utils.evaluate_model(
+        trainer.checkpoint_callback.last_checkpoint_path,
+        schema_tokenizer,
+        eval_dataset,
+        prefix="eval",
+    )
 
     with open(path_join(args.output_dir, "args.toml"), "w") as f:
         args_dict = {
-            "version": SAVE_FORMAT_VERSION,
-            "pl_checkpoint_path": checkpoint_callback.last_checkpoint_path,
+            "version": nsp.SAVE_FORMAT_VERSION,
+            "pl_checkpoint_path": trainer.checkpoint_callback.last_checkpoint_path,
+            "metrics": final_metrics,
             **vars(args),
         }
         toml.dump(args_dict, f)
 
-    logger.info("Training finished!")
-
-    logger.info("Generating predictions")
-    dataloader = torch.utils.data.DataLoader(
-        eval_dataset,
-        batch_size=args.batch_size,
-        collate_fn=Seq2SeqDataCollator(pad_id=text_tokenizer.pad_token_id).collate_batch,
-        num_workers=8,
-    )
-
-    predictions_ids, predictions_str = utils.iterative_prediction(
-        model=model,
-        dataloader=dataloader,
-        schema_tokenizer=schema_tokenizer,
-        max_len=63,
-        num_beams=1,
-        device=device,
-    )
-
-    # Finish the script if evaluation texts are not available
-    if preprocess_args is None:
-        exit()
-
-    logger.info("Computing inference-time metrics")
-
-    data_df = pd.read_table(
-        path_join(preprocess_args["data"], "eval.tsv"), names=["text", "tokens", "schema"],
-    )
-    targets_str = list(data_df.schema)
-
-    predictions_str = [schema_tokenizer.postprocess(p) for p in predictions_str]
-    exact_match = sum(int(p == t) for p, t in zip(predictions_str, targets_str)) / len(targets_str)
-    logger.info(f"Exact match (str): {exact_match}")
-
-    targets_ids = [list(ex.labels.numpy()[:-1]) for ex in eval_dataset]
-    exact_match_ids = sum(
-        int(str(p) == str(l)) for p, l in zip(predictions_ids, targets_ids)
-    ) / len(targets_str)
-    logger.info(f"Exact match (ids): {exact_match_ids}")
-
-    wandb_logger._experiment.summary["best_eval_exact_match"] = exact_match_ids
-
-    logger.info("Checking for mismatches between ids and str")
-
-    n_errors = 0
-
-    for i in range(len(targets_str)):
-        if (
-            str(predictions_ids[i]) == str(eval_dataset[i].labels.numpy()[:-1])
-            and predictions_str[i] != targets_str[i]
-        ):
-            n_errors += 1
-            logger.info("Mismatch ", n_errors)
-
-            logger.info("Target str: ", targets_str[i])
-            logger.info("Decoded   : ", predictions_str[i])
-
-            logger.info("Target ids : ", eval_dataset[i].labels)
-            logger.info("Predictions: ", predictions_ids[i])
-            logger.info("")
-
-    if n_errors > 0:
-        logger.info(f"Mismatches       : {n_errors}")
-        logger.info(f"Exact match (str): {exact_match}")
-        logger.info(f"Exact match (ids): {exact_match_ids}")
-
+    logger.info(description)
+    wandb_logger.log_metrics({**final_metrics["means"], **final_metrics["stdevs"]})
     wandb_logger.close()
 
 
