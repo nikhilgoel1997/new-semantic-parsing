@@ -261,6 +261,7 @@ def make_lightning_module(
         monitor_classes=args.new_classes,
         freezing_schedule=freezing_schedule,
         max_tgt_len=max_tgt_len,
+        no_lr_scheduler=args.no_lr_scheduler,
     )
 
     wandb_logger.watch(lightning_module, log="all", log_freq=args.log_every)

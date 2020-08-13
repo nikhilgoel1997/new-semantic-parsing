@@ -65,6 +65,7 @@ class PointerModule(LightningModule):
         log_every=50,
         monitor_classes=None,
         max_tgt_len=68,
+        no_lr_scheduler=False,
         freezing_schedule: EncDecFreezingSchedule = None,
     ):
         super().__init__()
@@ -85,6 +86,7 @@ class PointerModule(LightningModule):
         self.monitor_classes = monitor_classes
         self.freezing_schedule = freezing_schedule
         self.max_tgt_len = max_tgt_len
+        self.no_lr_scheduler = no_lr_scheduler
 
         self._collator = data.Seq2SeqDataCollator(
             pad_id=self.text_tokenizer.pad_token_id,
@@ -158,6 +160,8 @@ class PointerModule(LightningModule):
         optimizer = opt.get_optimizers(
             model=self.model, learning_rate=self.lr, weight_decay=self.weight_decay,
         )
+        if self.no_lr_scheduler:
+            return optimizer
 
         scheduler = opt.get_noam_schedule(
             optimizer, self.warmup_steps, self.model.decoder.config.hidden_size,

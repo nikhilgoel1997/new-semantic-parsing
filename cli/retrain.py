@@ -118,6 +118,8 @@ def parse_args(args=None):
                         help="p of the L-p norm used in move-norm regularization")
     parser.add_argument("--no-opt-state", default=False, action="store_true",
                         help="Initialize optimizer state randomly instead of loading it from the trainer checkpoint")
+    parser.add_argument("--no-lr-scheduler", default=False, action="store_true",
+                        help="Keep learning rate constant instead of scheduling it. Only works with retrain_simple.")
 
     # --- freezing
     parser.add_argument("--freeze-encoder", default=None, type=int,
@@ -189,6 +191,8 @@ def check_args(args):
         raise ValueError(
             "learning rate specification is not supported, use retrain_simple.py instead"
         )
+    if args.no_lr_scheduler:
+        raise ValueError("--no-lr-scheduler is not supported, use retrain_simple.py instead")
 
 
 def load_tokenizer(model_dir, data_dir):
