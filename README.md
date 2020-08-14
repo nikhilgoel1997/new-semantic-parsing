@@ -2,7 +2,7 @@
 
 ## Introduction
 
-In this work we study how to efficiently add new data to the semantic parsing model without retraining it from scratch.
+In this work we study how to efficiently add new data to a semantic parsing model without retraining it from scratch.
 Experiments include finetuning on new data, finetuning with subsampling from the old data and regularization techniques
 that improve the final preformance of the model and/or reduce the need of using large amounts of old data.
 
