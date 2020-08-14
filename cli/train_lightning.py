@@ -248,6 +248,9 @@ def make_lightning_module(
 
     freezing_schedule = nsp.dataclasses.EncDecFreezingSchedule.from_args(args)
 
+    # only used in retrain_simple.py
+    no_lr_scheduler = getattr(args, "no_lr_scheduler", False)
+
     lightning_module = nsp.PointerModule(
         model=model,
         schema_tokenizer=schema_tokenizer,
@@ -261,7 +264,7 @@ def make_lightning_module(
         monitor_classes=args.new_classes,
         freezing_schedule=freezing_schedule,
         max_tgt_len=max_tgt_len,
-        no_lr_scheduler=args.no_lr_scheduler,
+        no_lr_scheduler=no_lr_scheduler,
     )
 
     wandb_logger.watch(lightning_module, log="all", log_freq=args.log_every)
