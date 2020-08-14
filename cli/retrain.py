@@ -158,7 +158,7 @@ def parse_args(args=None):
         args.encoder_lr = args.lr
         args.decoder_lr = args.lr
 
-    if args.lr is None:
+    if args.lr is None and args.encoder_lr is not None:
         args.lr = {"encoder_lr": args.encoder_lr, "decoder_lr": args.decoder_lr}
 
     args.wandb_project = args.wandb_project or "new_semantic_parsing"
