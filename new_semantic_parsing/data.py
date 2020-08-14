@@ -105,7 +105,7 @@ class PointerDataset(torch.utils.data.Dataset):
         return isinstance(x[0], torch.Tensor)
 
     def torchify(self):
-        """Make all tensors torch.Tensor"""
+        """Makes all tensors torch.Tensor"""
         if self.torchified:
             return
 
@@ -121,7 +121,7 @@ class PointerDataset(torch.utils.data.Dataset):
         self.torchified = True
 
     def get_max_len(self):
-        """Get maximum length of source sequences and target sequences in the dataset
+        """Gets maximum length of source sequences and target sequences in the dataset
         Returns a tuple (source_max_len, target_max_len)
         if target_tensors is None, target_max_len is also None
         """
@@ -133,7 +133,7 @@ class PointerDataset(torch.utils.data.Dataset):
         return source_max_len, target_max_len
 
     def get_class_frequencies(self, schema_tokenizer: TopSchemaTokenizer):
-        """Get frequencies of each schema token"""
+        """Gets frequencies of each schema token"""
         if self.target_tensors is None:
             raise RuntimeError(".get_class_frequencies was called on the dataset with no labels")
 
@@ -218,7 +218,7 @@ class Seq2SeqDataCollator:
         return field_name.startswith("decoder_") or field_name == "labels"
 
     def _shape_check(self, maxlen, is_decoder, key):
-        """Data shape validation"""
+        """Performs data shape validation"""
         if is_decoder:
             if self._decoder_max_len is not None and self._decoder_max_len != maxlen:
                 raise ValueError(f"decoder input tensors have different lengths ({key})")
@@ -262,7 +262,7 @@ def make_test_dataset(filepath, schema_tokenizer: TopSchemaTokenizer, max_len=No
 
 class SampleConcatSubset(torch.utils.data.Dataset):
     def __init__(self, concat_dataset, sample_dataset, sample_probability):
-        """Concatenation of concat_dataset and a subset of sample_dataset.
+        """Implements concatenation of concat_dataset and a subset of sample_dataset.
 
         The elements of the subset are sampled with sample_probability.
 
@@ -285,7 +285,7 @@ class SampleConcatSubset(torch.utils.data.Dataset):
         return len(self._data)
 
     def resample(self, sample_probability=None):
-        """Resample from sample_dataset, inplace
+        """Resamples from sample_dataset, inplace
 
         Args:
             sample_probability: optional, float, 0 < sample_probability < 1,

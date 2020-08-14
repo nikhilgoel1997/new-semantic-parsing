@@ -48,7 +48,7 @@ def get_vocab_top_schema(text):
 
 
 def get_src_pointer_mask(input_ids, tokenizer: transformers.PreTrainedTokenizer):
-    """Compute mask which ignores padding and special tokens"""
+    """Computes mask which ignores padding and special tokens"""
     mask = np.ones(len(input_ids))
     if input_ids[0] == tokenizer.cls_token_id:
         mask[0] = 0
@@ -59,7 +59,7 @@ def get_src_pointer_mask(input_ids, tokenizer: transformers.PreTrainedTokenizer)
 
 
 def get_model_type(model_name):
-    """Search for a largest substring from transformers.CONFIG_MAPPING"""
+    """Searches for a largest substring from transformers.CONFIG_MAPPING"""
     candidate = ""
 
     for name in transformers.CONFIG_MAPPING:
@@ -73,7 +73,7 @@ def get_model_type(model_name):
 
 
 def make_subset(dataset, subset_size):
-    """Make torch Subset by randomly sampling indices from dataset
+    """Makes torch Subset by randomly sampling indices from dataset
 
     Args:
         dataset: torch Dataset
@@ -93,7 +93,7 @@ def make_subset(dataset, subset_size):
 
 
 def get_required_example_ids(schema_vocab, train_data):
-    """Find a subset of train_data that contains all schema_vocab tokens.
+    """Finds a subset of train_data that contains all schema_vocab tokens.
 
     Args:
         schema_vocab: set of str, required schema tokens
@@ -135,7 +135,7 @@ def matches_pattern(string, pattern):
 
 
 def snips2top(snips_example, intent):
-    """Convert Snips format to TOP format
+    """Converts Snips format to TOP format
 
     Args:
         snips_example: list, one example following snips format

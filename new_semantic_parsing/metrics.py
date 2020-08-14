@@ -34,7 +34,7 @@ class Tree:
     """TOP format tree object."""
 
     def __init__(self, entity, subtrees: List = None):
-        """Make a tree node with value entity and subtrees.
+        """Makes a tree node with value entity and subtrees.
 
         if subtrees is None, .subtrees attribute will be empty list
 
@@ -72,7 +72,7 @@ class Tree:
         return self._len
 
     def get_size(self, classes=None):
-        """Get the number of nodes with node.entity in classes.
+        """Gets the number of nodes with node.entity in classes.
 
         Args:
             classes: optional, a iterable of classes to consider when computing the size
@@ -188,7 +188,7 @@ class Tree:
 def get_metrics(
     pred_tokens, true_tokens, monitor_classes, prefix, schema_tokenizer, do_each=False
 ):
-    """Compute exact_match and tree-based metrics
+    """Computes exact_match and tree-based metrics
 
     Apply prefix to all keys.
     The main purpuse of this function is to unify evaluation in PointerModule and cli_utils.evaluate_model()
@@ -234,7 +234,7 @@ def get_metrics(
 
 
 def get_tree_path_metrics(pred_tokens, true_tokens, monitor_classes, prefix, do_each=False):
-    """Get metrics for all classes, for monitor classes and for monitor_classes[0].
+    """Gets metrics for all classes, for monitor classes and for monitor_classes[0].
 
     Apply prefix to all keys.
 
@@ -341,7 +341,7 @@ def get_tree_path_scores(pred_tokens, true_tokens, classes=None):
 
 
 def _get_paths_with_values(tree) -> dict:
-    """Go over the tree and return all slot values with the slot names.
+    """Goes over the tree and return all slot values with the slot names.
 
     Slot names include paths to this slot. E.g. IN1.SL1: sl1_value.
     Intents and slot without values have None as a value.
@@ -386,7 +386,7 @@ def _get_tree_path_matches(pred_tree_paths, true_tree_paths, classes=None):
 
 
 def compute_metrics_from_batch(predictions, labels, masks, stop_tokens):
-    """Compute metrics where all predictions, labels and masks are torch.tensor"""
+    """Computes metrics where all predictions, labels and masks are torch.tensor"""
     device = predictions.device
 
     # correct tokens which are not masked (masked tokens have mask == 0)
@@ -440,7 +440,7 @@ def compute_metrics_from_batch(predictions, labels, masks, stop_tokens):
 def get_outliers_metrics(
     metric_names, initial_metrics, final_metrics, prefix, suffix, metric_weights
 ):
-    """Get aggregate metrics evaluating the change of initial and final performance.
+    """Gets aggregate metrics evaluating the change of initial and final performance.
 
     Metrics are summed with metric_weights for relative metrics and without weights for absolute metrics.
     E.g., if metric_names is a list of positive outliers, this function computes Relative Improvemen

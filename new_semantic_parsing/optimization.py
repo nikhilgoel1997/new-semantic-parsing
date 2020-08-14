@@ -112,8 +112,7 @@ def get_optimizers(model, learning_rate, weight_decay=0, adam_eps=1e-9):
 
 
 def get_noam_schedule(optimizer, num_warmup_steps, model_size, last_epoch=1):
-    """
-    Creates a Noam (inverse square root) scheduler with linear warmup and encoder gradual unfreezing.
+    """Creates a Noam (inverse square root) scheduler with linear warmup and encoder gradual unfreezing.
 
     :param optimizer: torch Optimizer where some param groups have 'group_type' key
         if group_type starts with 'encoder_' it will be frozen for `num_frozen_encoder_steps`

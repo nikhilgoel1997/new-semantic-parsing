@@ -57,33 +57,33 @@ def parse_args(args=None):
                         help="Path to preprocess.py --save-dir containing tokenizer, "
                              "data.pkl, and args.toml")
     parser.add_argument("--output-dir", default=None,
-                        help="directory to store checkpoints and other output files")
+                        help="Directory to store checkpoints and other output files")
     parser.add_argument("--eval-data-amount", default=1.0, type=float,
-                        help="amount of validation set to use when training. "
+                        help="Amount of validation set to use when training. "
                              "The final evaluation will use the full dataset.")
     parser.add_argument("--new-classes", default=None,
                         help="names of classes to track")
 
     # model
     parser.add_argument("--encoder-model", default=None,
-                        help="pretrained model name, e.g. bert-base-uncased")
+                        help="Pretrained model name, e.g. bert-base-uncased")
     parser.add_argument("--layers", default=None, type=int,
-                        help="number of layers in the encoder. "
+                        help="Number of layers in the encoder. "
                              "Only used if --encoder-model is not provided.")
     parser.add_argument("--hidden", default=None, type=int,
-                        help="hidden size of the encoder. "
+                        help="Hidden size of the encoder. "
                              "Only used if --encoder-model is not provided.")
     parser.add_argument("--heads", default=None, type=int,
-                        help="hidden size of the encoder. "
+                        help="Hidden size of the encoder. "
                              "Only used if --encoder-model is not provided.")
     parser.add_argument("--decoder-layers", default=None, type=int,
-                        help="number of layers in the decoder. "
+                        help="Number of layers in the decoder. "
                              "Equal to the number of the encoder layers by default")
     parser.add_argument("--decoder-hidden", default=None, type=int,
-                        help="hidden size of the decoder. "
+                        help="Hidden size of the decoder. "
                              "Equal to the hidden side of the encoder by default")
     parser.add_argument("--decoder-heads", default=None, type=int,
-                        help="hidden size of the decoder. "
+                        help="Hidden size of the decoder. "
                              "Equal to the number of the encoder heads by default")
 
     # model architecture changes
@@ -107,7 +107,7 @@ def parse_args(args=None):
 
     parser.add_argument("--weight-decay", default=0, type=float)
     parser.add_argument("--dropout", default=0.1, type=float,
-                        help="dropout amount for the encoder, decoder and head, default value 0.1 is from Transformers")
+                        help="Dropout amount for the encoder, decoder and head, default value 0.1 is from Transformers")
     parser.add_argument("--warmup-steps", default=1, type=int)
     parser.add_argument("--gradient-accumulation-steps", default=1, type=int)
     parser.add_argument("--batch-size", default=64, type=int)
@@ -116,17 +116,17 @@ def parse_args(args=None):
 
     # --- freezing
     parser.add_argument("--freeze-encoder", default=None, type=int,
-                        help="step to freeze encoder")
+                        help="Step to freeze encoder")
     parser.add_argument("--unfreeze-encoder", default=None, type=int,
-                        help="step to unfreeze encoder")
+                        help="Step to unfreeze encoder")
     parser.add_argument("--freeze-decoder", default=None, type=int,
-                        help="step to freeze decoder")
+                        help="Step to freeze decoder")
     parser.add_argument("--unfreeze-decoder", default=None, type=int,
-                        help="step to unfreeze decoder")
+                        help="Step to unfreeze decoder")
     parser.add_argument("--freeze-head", default=None, type=int,
-                        help="step to freeze head")
+                        help="Step to freeze head")
     parser.add_argument("--unfreeze-head", default=None, type=int,
-                        help="step to unfreeze head")
+                        help="Step to unfreeze head")
 
     # misc
     parser.add_argument("--wandb-project", default=None)
