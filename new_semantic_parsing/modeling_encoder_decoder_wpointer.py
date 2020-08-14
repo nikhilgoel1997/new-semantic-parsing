@@ -43,7 +43,7 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
         model_args=None,
         **kwargs,
     ):
-        """Initialize the model either from config or from encoder and decoder models.
+        """Initializes the model either from config or from encoder and decoder models.
 
         Args:
             config: EncoderDecoderWPointerConfig

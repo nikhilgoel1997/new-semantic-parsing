@@ -1,12 +1,15 @@
-# New Project Template
+# Incremental Retraining for Semantic Parsing
 
-"This is not an officially supported Google product"
+## Introduction
 
-This template uses the Apache license, as is Google's default.  See the
-documentation for instructions on using alternate license.
-
+In this work we study how to efficiently add new data to a semantic parsing model without retraining it from scratch.
+Experiments include finetuning on new data, finetuning with subsampling from the old data and regularization techniques
+that improve the final preformance of the model and/or reduce the need of using large amounts of old data.
 
 ### Installation
+
+To work with the repository you need to install required packages and this package.
+Edit (-e) mode is perferred if you want to change the code.
 
 ```bash
 pip install -r requirements.txt
@@ -14,66 +17,80 @@ pip install -e .
 ```
 
 ### Usage
+
+`scripts/download_data.sh` downloads TOP and SNIPS datasets.
+It also reformats SNIPS into TOP format.
+
 ```bash
 # download data
 
 sh scripts/download_data.sh
+```
+
+Preprocess script splits train set into pretrain and finetune parts, creates tokenizers, numericalizes the data and saves in to `--output-dir` folder.
+
+```bash
 
 # preprocess
+
+DATA=data-bin/top_dataset
 
 python cli/preprocess.py \
   --data data/top-dataset-semantic-parsing \
   --text-tokenizer bert-base-cased \
-  --save-dir data-bin/top_dataset \
-
-
-# train
-
-python cli/train.py \
-  --data-dir data-bin/top_dataset \
-  --encoder-model bert-base-cased \
-  --decoder-lr 0.006 \
-  --encoder-lr 0.00001 \
-  --batch-size 32 \
-  --gradient-accumulation-steps 4 \
-  --dropout 0.1 \
-  --decoder-layers 4 \
-  --decoder-hidden 128 \
-  --decoder-heads 2 \
-  --epochs 150 \
-  --log-every 100 \
-  --output-dir output-dir/hodpxokz \
-
-
-# predict
-
-python cli/predict.py \
-  --data data/top-dataset-semantic-parsing/test.tsv \
-  --model output_dir/hodpxokz \
-  --output-file output_dir/hodpxokz/predictions.tsv \
-
-
+  --split-amount 0.9 \
+  --output-dir $DATA \
 ```
 
-## Source Code Headers
+Train script trains the model on the pretrain part and saves the model and the trainer to `--output-dir` folder.
+We recommend the following hyperparameters for training.
 
-Every file containing source code must include copyright and license
-information. This includes any JS/CSS files that you might be serving out to
-browsers. (This is to help well-intentioned people avoid accidental copying that
-doesn't comply with the license.)
+```bash
+# train
 
-Apache header:
+DATA=data-bin/top_dataset
+MODEL=output_dir/top_model
 
-    Copyright 2020 Google LLC
+python cli/train_lightning.py \
+  --data-dir $DATA  \
+  --encoder-model bert-base-cased \
+  --decoder-lr 0.2 \
+  --encoder-lr 0.02 \
+  --batch-size 192 \
+  --layers 4 \
+  --hidden 256 \
+  --dropout 0.2 \
+  --heads 4 \
+  --label-smoothing 0.1 \
+  --epochs 100 \
+  --warmup-steps 1500 \
+  --freeze-encoder 0 \
+  --unfreeze-encoder 500 \
+  --log-every 150 \
+  --early-stopping 10 \
+  --output-dir $MODEL \
+```
 
-    Licensed under the Apache License, Version 2.0 (the "License");
-    you may not use this file except in compliance with the License.
-    You may obtain a copy of the License at
+Retrain script loads the model and optimizer from the checkpoint and finetunes on the finetune part of the training set.
 
-        https://www.apache.org/licenses/LICENSE-2.0
+```bash
+DATA=data-bin/top_dataset
+MODEL=output_dir/top_model
 
-    Unless required by applicable law or agreed to in writing, software
-    distributed under the License is distributed on an "AS IS" BASIS,
-    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-    See the License for the specific language governing permissions and
-    limitations under the License.
+python cli/retrain.py \
+  --data-dir $DATA \
+  --model-dir $MODEL \
+  --batch-size 128 \
+  --dropout 0.2 \
+  --epochs 40 \
+  --log-every 100 \
+  --old-data-amount 0.1 \
+  --move-norm 0.1 \
+```
+
+## Run scripts
+
+You can find more usage examples in the `scripts` directory.
+
+## Disclaimer
+This is not an officially supported Google product

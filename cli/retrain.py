@@ -53,6 +53,10 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
 def parse_args(args=None):
+    """Parses cli arguments.
+
+    This function is shared between retrain.py and retrain_simple.py
+    """
     parser = argparse.ArgumentParser()
 
     # fmt: off
@@ -62,23 +66,23 @@ def parse_args(args=None):
                         help="Path to preprocess.py --save-dir containing tokenizer, "
                              "data.pkl, and args.toml")
     parser.add_argument("--output-dir", default=None,
-                        help="directory to store checkpoints and other output files")
+                        help="Directory to store checkpoints and other output files")
     parser.add_argument("--eval-data-amount", default=1., type=float,
                         help="amount of validation set to use when training. "
                              "The final evaluation will use the full dataset.")
-    parser.add_argument("--new-classes-file", default=None,
-                        help="path to a text file with names of classes to track, one class per line")
+    parser.add_argument("--new-classes", default=None,
+                        help="names of classes to track")
 
     parser.add_argument("--new-data-amount", default=1., type=float,
-                        help="amount of new data (finetune_set) to train on, 0 < amount <= 1")
+                        help="Amount of new data (finetune_set) to train on, 0 < amount <= 1")
     parser.add_argument("--old-data-amount", default=0., type=float,
-                        help="amount of old data (train_set) to train on, only values from {0, 1} are supported")
+                        help="Amount of old data (train_set) to train on, only values from {0, 1} are supported")
     parser.add_argument("--old-data-sampling-method", default="merge_subset",
                         help="how to sample from old data")
 
     # model
     parser.add_argument("--model-dir", required=True,
-                        help="model directory containing 1) checkpoint loadable via "
+                        help="Model directory containing 1) checkpoint loadable via "
                              "EncoderDecoderWPointerModel.from_pretrained and "
                              "2) tokenizer directory")
 
@@ -99,32 +103,37 @@ def parse_args(args=None):
                         help="Decoder learning rate, overrides --lr")
 
     parser.add_argument("--weight-decay", default=None, type=float)
-    parser.add_argument("--move-norm", default=None, type=float,
-                        help="regularization coefficient for the distance between the initial and current network")
-    parser.add_argument("--move-norm-p", default=2, type=int,
-                        help="p of the L-p norm used in move-norm regularization")
     parser.add_argument("--dropout", default=None, type=float,
-                        help="dropout amount for the encoder and decoder, by defalut checkpoint value is used")
-    parser.add_argument("--warmup-steps", default=None, type=int)
+                        help="Dropout amount for the encoder and decoder, by defalut checkpoint value is used")
+    parser.add_argument("--warmup-steps", default=0, type=int)
     parser.add_argument("--gradient-accumulation-steps", default=1, type=int)
     parser.add_argument("--batch-size", default=None, type=int)
     parser.add_argument("--max-grad-norm", default=1.0, type=float)
     parser.add_argument("--label-smoothing", default=None, type=float)
-    parser.add_argument("--no-opt-state", default=False, action="store_true")
+
+    # --- retrain-specific
+    parser.add_argument("--move-norm", default=None, type=float,
+                        help="Regularization coefficient for the distance between the initial and current network")
+    parser.add_argument("--move-norm-p", default=2, type=int,
+                        help="Parameter p of the L-p norm used in move-norm regularization")
+    parser.add_argument("--no-opt-state", default=False, action="store_true",
+                        help="Initialize optimizer state randomly instead of loading it from the trainer checkpoint")
+    parser.add_argument("--no-lr-scheduler", default=False, action="store_true",
+                        help="Keep learning rate constant instead of scheduling it. Only works with retrain_simple.")
 
     # --- freezing
     parser.add_argument("--freeze-encoder", default=None, type=int,
-                        help="step to freeze encoder")
+                        help="Step to freeze encoder")
     parser.add_argument("--unfreeze-encoder", default=None, type=int,
-                        help="step to unfreeze encoder")
+                        help="Step to unfreeze encoder")
     parser.add_argument("--freeze-decoder", default=None, type=int,
-                        help="step to freeze decoder")
+                        help="Step to freeze decoder")
     parser.add_argument("--unfreeze-decoder", default=None, type=int,
-                        help="step to unfreeze decoder")
+                        help="Step to unfreeze decoder")
     parser.add_argument("--freeze-head", default=None, type=int,
-                        help="step to freeze head")
+                        help="Step to freeze head")
     parser.add_argument("--unfreeze-head", default=None, type=int,
-                        help="step to unfreeze head")
+                        help="Step to unfreeze head")
 
     # misc
     parser.add_argument("--wandb-project", default=None)
@@ -145,11 +154,16 @@ def parse_args(args=None):
     if (args.encoder_lr is not None) ^ (args.decoder_lr is not None):
         raise ValueError("--encoder-lr and --decoder-lr should be both specified")
 
-    if args.encoder_lr is not None:
+    if args.encoder_lr is None and args.lr is not None:
+        args.encoder_lr = args.lr
+        args.decoder_lr = args.lr
+
+    if args.lr is None:
         args.lr = {"encoder_lr": args.encoder_lr, "decoder_lr": args.decoder_lr}
 
     args.wandb_project = args.wandb_project or "new_semantic_parsing"
     args.tags = args.tags.split(",") if args.tags else []  # list is required by wandb interface
+    args.new_classes = args.new_classes.split(",") if args.new_classes else []
 
     if args.split_amount_finetune is not None:
         args.split_amount_train = 1.0 - args.split_amount_finetune
@@ -172,6 +186,15 @@ def parse_args(args=None):
     return args
 
 
+def check_args(args):
+    if args.lr is not None:
+        raise ValueError(
+            "Learning rate specification is not supported, use retrain_simple.py instead."
+        )
+    if args.no_lr_scheduler:
+        raise ValueError("--no-lr-scheduler is not supported, use retrain_simple.py instead.")
+
+
 def load_tokenizer(model_dir, data_dir):
     tokenizer_path1 = model_dir
     tokenizer_path2 = path_join(data_dir, "tokenizer")
@@ -181,7 +204,7 @@ def load_tokenizer(model_dir, data_dir):
     elif os.path.exists(tokenizer_path2):
         schema_tokenizer = nsp.TopSchemaTokenizer.load(tokenizer_path2)
     else:
-        raise ValueError("Tokenizer is not found in both --model-dir and --data-dir")
+        raise ValueError("Tokenizer is not found in both --model-dir and --data-dir.")
 
     return schema_tokenizer
 
@@ -190,7 +213,7 @@ def load_data(path, new_data_amount, old_data_amount, old_data_sampling_method, 
     datasets = torch.load(path)
     train_dataset: nsp.PointerDataset = datasets["finetune_dataset"]
     if train_dataset is None:
-        raise RuntimeError("Datafile provided does not contain finetune_dataset")
+        raise RuntimeError("Datafile provided does not contain finetune_dataset.")
 
     eval_dataset: nsp.PointerDataset = datasets["valid_dataset"]
 
@@ -298,14 +321,20 @@ def load_trainer(checkpoint_path, args, wandb_logger):
 
 
 def modify_checkpoint_for_retraining(
-    checkpoint_path, weight_decay, output_dir, no_opt_state=False, lightning_module=None
+    checkpoint_path,
+    output_dir,
+    lr=None,
+    weight_decay=None,
+    no_opt_state=False,
+    lightning_module=None,
 ):
-    """Load checkpoint file, modify it and save a modified checkpoint to output_dir
+    """Loads checkpoint file, modify it and save a modified checkpoint to output_dir
 
     Args:
         checkpoint_path: str, path to lightning checkpoint
+        output_dir: str, directory to save new checkpoint with name initial_checkpoint.pl
+        lr: dict, {'encoder_lr': float, 'decoder_lr': float}
         weight_decay: float
-        output_dir: str
         no_opt_state: bool, whether to restore optimizer state or not
         lightning_module: PointerModule
 
@@ -318,10 +347,9 @@ def modify_checkpoint_for_retraining(
 
     if no_opt_state:
         optimizer = optimization.get_optimizers(
-            lightning_module.model,
-            lightning_module.lr,
-            lightning_module.weight_decay,
-            lightning_module.adam_eps,
+            model=lightning_module.model,
+            learning_rate=lr or lightning_module.lr,
+            weight_decay=lightning_module.weight_decay,
         )
         checkpoint["optimizer_states"] = [optimizer.state_dict()]
 
@@ -351,13 +379,9 @@ def load_lightning_module(
     args: argparse.Namespace,
     wandb_logger: pl.loggers.WandbLogger,
 ):
-    """Load lightning module with some of the parameters overwritten."""
+    """Loads lightning module with some of the parameters overwritten."""
 
-    new_classes = None
-    if args.new_classes_file is not None:
-        with open(args.new_classes_file) as f:
-            new_classes = f.read().strip().split("\n")
-            wandb_logger.log_hyperparams({"new_classes": " ".join(new_classes)})
+    wandb_logger.log_hyperparams({"new_classes": " ".join(args.new_classes)})
 
     # Lightning loads all params which are not specified in .load_from_checkpoint
     # thus, some arguments are only provided if we want to override the loaded values
@@ -378,7 +402,7 @@ def load_lightning_module(
         schema_tokenizer=schema_tokenizer,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        monitor_classes=new_classes,
+        monitor_classes=args.new_classes,
         **module_kwargs,
     )
 
@@ -436,8 +460,9 @@ def main(args):
     # override some of the parameters saved in the Trainer
     checkpoint_path = modify_checkpoint_for_retraining(
         train_args["pl_checkpoint_path"],
-        args.weight_decay,
         args.output_dir,
+        args.lr,
+        args.weight_decay,
         args.no_opt_state,
         lightning_module,
     )
@@ -479,6 +504,7 @@ def main(args):
         schema_tokenizer,
         eval_dataset,
         prefix="eval",
+        max_len=train_args.get("max_tgt_len", 68),  # 68 is max_tgt_len for TOP
     )
 
     logger.info(description)
@@ -501,4 +527,5 @@ def main(args):
 
 if __name__ == "__main__":
     args = parse_args()
+    check_args(args)
     main(args)

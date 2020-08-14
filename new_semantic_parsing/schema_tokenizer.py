@@ -35,12 +35,10 @@ from new_semantic_parsing.configuration_encoder_decoder_wpointer import (
 
 class TopSchemaTokenizer:
     """
-    Used for TOP schema tokenization
+    Handles tokenization of TOP schema.
 
-    used for *both* source sentence and schema
-
-    encodes schema into token_ids from schema_vocab
-    and words into position-based ids
+    Encodes schema into token_ids from schema_vocab and words into position-based ids.
+    Used for *both* source sentence and schema.
 
     word_id = tokenizer.vocab_size + position
 

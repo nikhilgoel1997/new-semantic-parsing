@@ -30,6 +30,7 @@ import pytorch_lightning as pl
 
 import new_semantic_parsing as nsp
 import new_semantic_parsing.callbacks
+import new_semantic_parsing.dataclasses
 
 from new_semantic_parsing import utils, cli_utils
 
@@ -56,33 +57,33 @@ def parse_args(args=None):
                         help="Path to preprocess.py --save-dir containing tokenizer, "
                              "data.pkl, and args.toml")
     parser.add_argument("--output-dir", default=None,
-                        help="directory to store checkpoints and other output files")
+                        help="Directory to store checkpoints and other output files")
     parser.add_argument("--eval-data-amount", default=1.0, type=float,
-                        help="amount of validation set to use when training. "
+                        help="Amount of validation set to use when training. "
                              "The final evaluation will use the full dataset.")
-    parser.add_argument("--new-classes-file", default=None,
-                        help="path to a text file with names of classes to track, one class per line")
+    parser.add_argument("--new-classes", default=None,
+                        help="names of classes to track")
 
     # model
     parser.add_argument("--encoder-model", default=None,
-                        help="pretrained model name, e.g. bert-base-uncased")
+                        help="Pretrained model name, e.g. bert-base-uncased")
     parser.add_argument("--layers", default=None, type=int,
-                        help="number of layers in the encoder. "
+                        help="Number of layers in the encoder. "
                              "Only used if --encoder-model is not provided.")
     parser.add_argument("--hidden", default=None, type=int,
-                        help="hidden size of the encoder. "
+                        help="Hidden size of the encoder. "
                              "Only used if --encoder-model is not provided.")
     parser.add_argument("--heads", default=None, type=int,
-                        help="hidden size of the encoder. "
+                        help="Hidden size of the encoder. "
                              "Only used if --encoder-model is not provided.")
     parser.add_argument("--decoder-layers", default=None, type=int,
-                        help="number of layers in the decoder. "
+                        help="Number of layers in the decoder. "
                              "Equal to the number of the encoder layers by default")
     parser.add_argument("--decoder-hidden", default=None, type=int,
-                        help="hidden size of the decoder. "
+                        help="Hidden size of the decoder. "
                              "Equal to the hidden side of the encoder by default")
     parser.add_argument("--decoder-heads", default=None, type=int,
-                        help="hidden size of the decoder. "
+                        help="Hidden size of the decoder. "
                              "Equal to the number of the encoder heads by default")
 
     # model architecture changes
@@ -98,8 +99,7 @@ def parse_args(args=None):
                         help="Lightning-only. Early stopping patience. No early stopping by default.")
 
     parser.add_argument("--seed", default=1, type=int)
-    parser.add_argument("--lr", default=None, type=float,
-                        help="By default, lr is chosen according to the Scaling Laws for Neural Language Models")
+    parser.add_argument("--lr", type=float)
     parser.add_argument("--encoder-lr", default=None, type=float,
                         help="Encoder learning rate, overrides --lr")
     parser.add_argument("--decoder-lr", default=None, type=float,
@@ -107,7 +107,7 @@ def parse_args(args=None):
 
     parser.add_argument("--weight-decay", default=0, type=float)
     parser.add_argument("--dropout", default=0.1, type=float,
-                        help="dropout amount for the encoder, decoder and head, default value 0.1 is from Transformers")
+                        help="Dropout amount for the encoder, decoder and head, default value 0.1 is from Transformers")
     parser.add_argument("--warmup-steps", default=1, type=int)
     parser.add_argument("--gradient-accumulation-steps", default=1, type=int)
     parser.add_argument("--batch-size", default=64, type=int)
@@ -116,17 +116,17 @@ def parse_args(args=None):
 
     # --- freezing
     parser.add_argument("--freeze-encoder", default=None, type=int,
-                        help="step to freeze encoder")
+                        help="Step to freeze encoder")
     parser.add_argument("--unfreeze-encoder", default=None, type=int,
-                        help="step to unfreeze encoder")
+                        help="Step to unfreeze encoder")
     parser.add_argument("--freeze-decoder", default=None, type=int,
-                        help="step to freeze decoder")
+                        help="Step to freeze decoder")
     parser.add_argument("--unfreeze-decoder", default=None, type=int,
-                        help="step to unfreeze decoder")
+                        help="Step to unfreeze decoder")
     parser.add_argument("--freeze-head", default=None, type=int,
-                        help="step to freeze head")
+                        help="Step to freeze head")
     parser.add_argument("--unfreeze-head", default=None, type=int,
-                        help="step to unfreeze head")
+                        help="Step to unfreeze head")
 
     # misc
     parser.add_argument("--wandb-project", default=None)
@@ -153,6 +153,7 @@ def parse_args(args=None):
     args.decoder_heads = args.decoder_heads or args.heads
     args.wandb_project = args.wandb_project or "new_semantic_parsing"
     args.tags = args.tags.split(",") if args.tags else []  # list is required by wandb interface
+    args.new_classes = args.new_classes.split(",") if args.new_classes else []
 
     if args.split_amount_finetune is not None:
         args.split_amount_train = 1.0 - args.split_amount_finetune
@@ -240,6 +241,33 @@ def make_model(schema_tokenizer, max_src_len, args, preprocess_args=None):
     return model
 
 
+def make_lightning_module(
+    model, schema_tokenizer, train_dataset, eval_dataset, max_tgt_len, args, wandb_logger
+):
+    wandb_logger.log_hyperparams({"new_classes": " ".join(args.new_classes)})
+
+    freezing_schedule = nsp.dataclasses.EncDecFreezingSchedule.from_args(args)
+
+    lightning_module = nsp.PointerModule(
+        model=model,
+        schema_tokenizer=schema_tokenizer,
+        train_dataset=train_dataset,
+        valid_dataset=eval_dataset,
+        lr=args.lr,
+        batch_size=args.batch_size,
+        warmup_steps=args.warmup_steps,
+        weight_decay=args.weight_decay,
+        log_every=args.log_every,
+        monitor_classes=args.new_classes,
+        freezing_schedule=freezing_schedule,
+        max_tgt_len=max_tgt_len,
+        no_lr_scheduler=args.no_lr_scheduler,
+    )
+
+    wandb_logger.watch(lightning_module, log="all", log_freq=args.log_every)
+    return lightning_module
+
+
 def make_trainer(args, wandb_logger):
     """Make lightning Trainer with callbacks for checkpointing, early stopping and lr logging.
 
@@ -311,7 +339,9 @@ def main(args):
     train_dataset: nsp.PointerDataset = datasets["train_dataset"]
     eval_dataset: nsp.PointerDataset = datasets["valid_dataset"]
 
-    max_src_len, _ = train_dataset.get_max_len()
+    wandb_logger.log_hyperparams({"num_data": len(train_dataset)})
+
+    max_src_len, max_tgt_len = train_dataset.get_max_len()
 
     try:
         preprocess_args = cli_utils.load_saved_args(path_join(args.data_dir, "args.toml"))
@@ -325,32 +355,9 @@ def main(args):
 
     logger.info("Preparing for training")
 
-    new_classes = None
-    if args.new_classes_file is not None:
-        with open(args.new_classes_file) as f:
-            new_classes = f.read().strip().split("\n")
-            wandb_logger.log_hyperparams({"new_classes": " ".join(new_classes)})
-
-    freezing_schedule = nsp.dataclasses.EncDecFreezingSchedule.from_args(args)
-
-    wandb_logger.log_hyperparams({"num_data": len(train_dataset)})
-
-    lightning_module = nsp.PointerModule(
-        model=model,
-        schema_tokenizer=schema_tokenizer,
-        train_dataset=train_dataset,
-        valid_dataset=eval_dataset,
-        lr=args.lr,
-        batch_size=args.batch_size,
-        warmup_steps=args.warmup_steps,
-        weight_decay=args.weight_decay,
-        log_every=args.log_every,
-        monitor_classes=new_classes,
-        freezing_schedule=freezing_schedule,
+    lightning_module = make_lightning_module(
+        model, schema_tokenizer, train_dataset, eval_dataset, max_tgt_len, args, wandb_logger
     )
-
-    wandb_logger.watch(lightning_module, log="all", log_freq=args.log_every)
-
     trainer = make_trainer(args, wandb_logger)
 
     # --- FIT
@@ -369,6 +376,7 @@ def main(args):
         schema_tokenizer,
         eval_dataset,
         prefix="eval",
+        max_len=max_tgt_len,
     )
 
     with open(path_join(args.output_dir, "args.toml"), "w") as f:
@@ -376,6 +384,8 @@ def main(args):
             "version": nsp.SAVE_FORMAT_VERSION,
             "pl_checkpoint_path": trainer.checkpoint_callback.last_checkpoint_path,
             "metrics": final_metrics,
+            "max_src_len": max_src_len,
+            "max_tgt_len": max_tgt_len,
             **vars(args),
         }
         toml.dump(args_dict, f)

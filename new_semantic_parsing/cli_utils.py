@@ -33,12 +33,11 @@ def evaluate_model(
     schema_tokenizer: nsp.TopSchemaTokenizer,
     eval_dataset,
     prefix,
+    max_len,
     n_rounds=5,
-    subset_size=0.7,
-    max_len=68,
     num_beams=1,
 ):
-    """Compute metrics for each class n_rounds times and average results
+    """Computes metrics for each class n_rounds times and average results
 
     To reduce the amount of noise in the metrics,
     in every round evaluate on a random subset of eval_dataset.
@@ -83,11 +82,8 @@ def evaluate_model(
     true_tokens = _get_true_tokens_from_dataset(lightning_module.valid_dataset, schema_tokenizer)
 
     all_final_metrics = []
-    for _ in tqdm(range(n_rounds), desc="Computing metrics"):
-        predictions_subset, labels_subset = _get_random_subsets(
-            pred_tokens, true_tokens, subset_size
-        )
-
+    folds = _get_kfold_subsets(pred_tokens, true_tokens, n_rounds)
+    for predictions_subset, labels_subset in tqdm(folds, desc="Computing metrics"):
         _final_metrics = nsp.metrics.get_metrics(
             predictions_subset,
             labels_subset,
@@ -112,16 +108,31 @@ def _get_true_tokens_from_dataset(dataset, schema_tokenizer):
     return true_tokens
 
 
-def _get_random_subsets(pred_tokens, true_tokens, subset_size):
-    subset_size_int = int(subset_size * len(pred_tokens))
+def _get_kfold_subsets(pred_tokens, true_tokens, k_folds):
+    """Gets cross-validation like splits.
 
-    permutation = np.random.permutation(len(pred_tokens))
-    permutation = permutation[:subset_size_int]
+    Returns:
+        generator with k_fold elements,
+        each element is a tuple of (pred_tokens_subset, true_tokens_subset)
+    """
 
-    predictions_subset = [pred_tokens[i] for i in permutation]
-    labels_subset = [true_tokens[i] for i in permutation]
+    n_examples = len(pred_tokens)
+    permutation = np.random.permutation(n_examples)
 
-    return predictions_subset, labels_subset
+    fold_size = n_examples // k_folds
+    fold_edges = [fold_size * i for i in range(1, k_folds)]
+
+    folds = np.split(permutation, fold_edges)
+
+    assert len(folds) == k_folds
+
+    for fold_idx in range(k_folds):
+        subset_ids = np.concatenate([f for i, f in enumerate(folds) if i != fold_idx])
+
+        _pred_tokens = [pred_tokens[i] for i in subset_ids]
+        _true_tokens = [true_tokens[i] for i in subset_ids]
+
+        yield _pred_tokens, _true_tokens
 
 
 def _get_metrics_staistic(metrics):
@@ -157,7 +168,7 @@ def _get_final_metrics_description(final_metrics):
 
 
 def check_config(pointer_module, trainer, args, strict=False):
-    """Check that both module and trainer comply with args"""
+    """Checks that both module and trainer comply with args"""
     _cfg = pointer_module.model.config
     if args.dropout is not None:
         assert _cfg.dropout == args.dropout
@@ -189,7 +200,14 @@ def iterative_prediction(
     device="cpu",
     return_tokens=False,
 ):
-    """Inference-time prediction loop."""
+    """Executes inference-time prediction loop.
+
+    Returns:
+        A tuple of two elements (predictions_ids, predictions_str)
+            predictions_ids: list of np.arrays
+            predictions_str: list of strings if return_tokens is False
+                or list of lists of strings if return_tokens is True
+    """
     model = model.to(device)
 
     predictions_ids = []
@@ -226,7 +244,7 @@ def iterative_prediction(
 
 
 def get_outliers(pretrain_metrics, final_metrics, filter_by_name=None):
-    """Get the names of metrics that are worse and better than the initial value with a high probability (0.97)
+    """Gets the names of metrics that are worse and better than the initial value with a high probability (0.97)
 
     97% confidence comes from the probability that both metrics will exceed/fall behind their standard deviation
     e.g. m1 > m1 + std1 with prob 1/6 and m2 < m2 - std2 with prob 1/6, then m2 < m1 with prob 1/6**2 ~= 0.03
@@ -279,7 +297,7 @@ def load_saved_args(path):
 
 
 def evaluate_finetuning_procedure(pretrain_metrics, final_metrics, metric_weights):
-    """Identify the classes that degraded for sure and improved for sure, compute RI and RD.
+    """Identifies the classes that degraded for sure and improved for sure, compute RI and RD.
 
     RI and RD
 
