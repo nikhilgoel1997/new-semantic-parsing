@@ -151,8 +151,14 @@ def main(args):
         toml.dump(args_dict, f)
 
     logger.info("Training finished!")
+    best_model_checkpoint = trainer.checkpoint_callback.last_checkpoint_path
+    if args.average_checkpoints:
+        cli_retrain.average_checkpoints(
+            model, args, save_to=os.path.dirname(best_model_checkpoint)
+        )
+
     final_metrics, description = cli_utils.evaluate_model(
-        trainer.checkpoint_callback.last_checkpoint_path,
+        best_model_checkpoint,
         schema_tokenizer,
         eval_dataset,
         prefix="eval",

@@ -79,6 +79,8 @@ def parse_args(args=None):
                         help="Amount of old data (train_set) to train on, only values from {0, 1} are supported")
     parser.add_argument("--old-data-sampling-method", default="merge_subset",
                         help="how to sample from old data")
+    parser.add_argument("--average-checkpoints", default=False, action="store_true")
+    parser.add_argument("--new-model-weight", default=0.5, type=float)
 
     # model
     parser.add_argument("--model-dir", required=True,
@@ -409,6 +411,19 @@ def load_lightning_module(
     return lightning_module
 
 
+def average_checkpoints(new_model, args, save_to):
+    old_model = load_model(
+        args.model_dir, args.dropout, args.move_norm, args.move_norm_p, args.label_smoothing
+    )
+    cli_utils.average_models(
+        old_model=old_model,
+        new_model=new_model,
+        new_model_weight=args.new_model_weight,
+        inplace=True,
+    )
+    new_model.save_pretrained(save_to)
+
+
 def main(args):
     utils.set_seed(args.seed)
 
@@ -499,8 +514,13 @@ def main(args):
         toml.dump(args_dict, f)
 
     logger.info("Training finished!")
+
+    best_model_checkpoint = trainer.checkpoint_callback.last_checkpoint_path
+    if args.average_checkpoints:
+        average_checkpoints(model, args, save_to=os.path.dirname(best_model_checkpoint))
+
     final_metrics, description = cli_utils.evaluate_model(
-        trainer.checkpoint_callback.last_checkpoint_path,
+        best_model_checkpoint,
         schema_tokenizer,
         eval_dataset,
         prefix="eval",

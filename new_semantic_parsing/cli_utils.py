@@ -378,3 +378,38 @@ def get_metrics_delta(pretrain_metrics, final_metrics, filter_by_name=None):
         deltas["delta/" + metric_name] = final_metrics["means"][metric_name] - pretrain_mean
 
     return deltas
+
+
+def average_models(
+    old_model: nsp.EncoderDecoderWPointerModel,
+    new_model: nsp.EncoderDecoderWPointerModel,
+    new_model_weight: float,
+    inplace=False,
+):
+    """Averages new_model and old_model parameters.
+
+    Parameters are averaged with weights new_model_weight and (1 - new_model_weight).
+    If inplace, mutates new_model object.
+    """
+    if not (0 <= new_model_weight <= 1):
+        raise ValueError(
+            f"new_model_weight should be between 0 and 1, got {new_model_weight} instead."
+        )
+    if not inplace:
+        new_model_tmp = nsp.EncoderDecoderWPointerModel(new_model.config)
+        new_model_tmp.load_state_dict(new_model.state_dict())
+        new_model = new_model_tmp
+
+    old_named_params = old_model.state_dict()
+    new_named_params = new_model.state_dict()
+
+    if old_named_params.keys() != new_named_params.keys():
+        raise RuntimeError("Model should have the same parameters")
+
+    for name, old_param in old_named_params.items():
+        new_named_params[name] = (
+            new_model_weight * new_named_params[name] + (1 - new_model_weight) * old_param
+        )
+
+    new_model.load_state_dict(new_named_params, strict=True)
+    return new_model

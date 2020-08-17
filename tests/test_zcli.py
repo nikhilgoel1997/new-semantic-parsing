@@ -561,3 +561,36 @@ class TestPreprocessCLI(unittest.TestCase):
         args = retrain_simple.set_default_args(args)
 
         retrain_simple.main(args)
+
+    @unittest.skipUnless(data_exists, skip_msg)
+    def test16_retrain_average(self):
+        shutil.rmtree(OUTPUT_DIR, ignore_errors=True)
+
+        args = [
+            "--data-dir",
+            DATA_BIN,
+            "--output-dir",
+            OUTPUT_DIR,
+            "--model-dir",
+            MODEL_DIR,
+            "--tags",
+            "CLI_tests",
+            "--lr",
+            "0.3",
+            "--epochs",
+            "1",
+            "--log-every",
+            "10",
+            "--new-classes",
+            "IN:GET_LOCATION,IN:GET_LOCATION_HOME,SL:POINT_ON_MAP,SL:CATEGORY_LOCATION",
+            "--batch-size",
+            "16",
+            "--no-lr-scheduler",
+            "--average-checkpoints",
+        ]
+
+        args = retrain.parse_args(args)
+        retrain_simple.check_args(args)
+        args = retrain_simple.set_default_args(args)
+
+        retrain_simple.main(args)
