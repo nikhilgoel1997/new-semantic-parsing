@@ -35,6 +35,21 @@ class CliUtilsTest(unittest.TestCase):
         self.assertSequenceEqual(negative, ["metric1"])
         self.assertSequenceEqual(positive, ["metric2"])
 
+    def test_get_outliers_sigma0(self):
+        initial_metrics = {
+            "means": {"metric1": 0.7, "metric2": 0.8, "metric3": 0.9},
+            "stdevs": {"metric1_std": 0.05, "metric2_std": 0.03, "metric3_std": 0.05},
+        }
+
+        final_metrics = {
+            "means": {"metric1": 0.5, "metric2": 0.9, "metric3": 0.95},
+            "stdevs": {"metric1_std": 0.05, "metric2_std": 0.05, "metric3_std": 0.05},
+        }
+
+        negative, positive = cli_utils.get_outliers(initial_metrics, final_metrics, sigma=0)
+        self.assertSequenceEqual(negative, ["metric1"])
+        self.assertSequenceEqual(positive, ["metric2", "metric3"])
+
     def test_get_kfold_subsets(self):
         for k_folds in [3, 4]:
             with self.subTest(k_folds):

@@ -268,10 +268,10 @@ def get_outliers(pretrain_metrics, final_metrics, filter_by_name=None, sigma=1.0
         final_mean = final_metrics["means"][metric_name]
         final_std = final_metrics["stdevs"][metric_name + "_std"]
 
-        if pretrain_mean - pretrain_std > sigma * (final_mean + final_std):
+        if pretrain_mean - final_mean > sigma * (pretrain_std + final_std):
             negative_outliers.append(metric_name)
 
-        if pretrain_mean + pretrain_std < sigma * (final_mean - final_std):
+        if pretrain_mean - final_mean < -sigma * (pretrain_std + final_std):
             positive_outliers.append(metric_name)
 
     return negative_outliers, positive_outliers
