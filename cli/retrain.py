@@ -539,6 +539,20 @@ def main(args):
     )
     wandb_logger.log_metrics(finetuning_metrics)
 
+    # Compute RI and RD without the outliers stuff
+    finetuning_metrics0 = cli_utils.evaluate_finetuning_procedure(
+        pretrain_metrics, final_metrics, class_weights, sigma=0
+    )
+    finetuning_metrics0 = {k + "_0": v for k, v in finetuning_metrics0.items()}
+    wandb_logger.log_metrics(finetuning_metrics0)
+
+    # Compute RI and RD with very small outliers stuff
+    finetuning_metrics0 = cli_utils.evaluate_finetuning_procedure(
+        pretrain_metrics, final_metrics, class_weights, sigma=0.1
+    )
+    finetuning_metrics0 = {k + "_0.1": v for k, v in finetuning_metrics0.items()}
+    wandb_logger.log_metrics(finetuning_metrics0)
+
     wandb_logger.close()
 
     if args.clean_output:
