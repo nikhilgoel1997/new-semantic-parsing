@@ -415,11 +415,8 @@ def average_checkpoints(new_model, args, save_to):
     old_model = load_model(
         args.model_dir, args.dropout, args.move_norm, args.move_norm_p, args.label_smoothing
     )
-    cli_utils.average_models(
-        old_model=old_model,
-        new_model=new_model,
-        new_model_weight=args.new_model_weight,
-        inplace=True,
+    new_model = cli_utils.average_models(
+        old_model=old_model, new_model=new_model, new_model_weight=args.new_model_weight,
     )
     new_model.save_pretrained(save_to)
 
@@ -538,13 +535,6 @@ def main(args):
         pretrain_metrics, final_metrics, class_weights
     )
     wandb_logger.log_metrics(finetuning_metrics)
-
-    # Compute RI and RD without the outliers stuff
-    finetuning_metrics0 = cli_utils.evaluate_finetuning_procedure(
-        pretrain_metrics, final_metrics, class_weights, sigma=0
-    )
-    finetuning_metrics0 = {k + "_0": v for k, v in finetuning_metrics0.items()}
-    wandb_logger.log_metrics(finetuning_metrics0)
 
     # Compute RI and RD with very small outliers stuff
     finetuning_metrics0 = cli_utils.evaluate_finetuning_procedure(
