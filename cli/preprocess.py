@@ -99,7 +99,8 @@ def train_finetune_split(train_data, schema_vocab, split_amount, split_class=Non
         _take = int(len(ids) * split_amount)
         _leave = len(ids) - _take
         logger.info(
-            f"Take {_take} class examples to finetuning set and leave {_leave} class examles in training set."
+            f"Take {_take} class examples to finetuning set and leave {_leave} class examles in"
+            " training set."
         )
         if len(ids) == 0:
             raise RuntimeError(f"Cannot find specified class {split_class} in the data.")

@@ -114,7 +114,12 @@ def main(args):
 
     logger.info("Loading model")
     model = cli_retrain.load_model(
-        args.model_dir, args.dropout, args.move_norm, args.move_norm_p, args.label_smoothing
+        model_dir=args.model_dir,
+        dropout=args.dropout,
+        move_norm=args.move_norm,
+        move_norm_p=args.move_norm_p,
+        label_smoothing=args.label_smoothing,
+        weight_consolidation=args.weight_consolidation,
     )
 
     logger.info("Preparing for training")

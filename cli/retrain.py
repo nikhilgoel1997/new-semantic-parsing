@@ -122,6 +122,8 @@ def parse_args(args=None):
                         help="Initialize optimizer state randomly instead of loading it from the trainer checkpoint")
     parser.add_argument("--no-lr-scheduler", default=False, action="store_true",
                         help="Keep learning rate constant instead of scheduling it. Only works with retrain_simple.")
+    parser.add_argument("--weight-consolidation", default=None, type=float,
+                        help="Weight consolidation regularization strength.")
 
     # --- freezing
     parser.add_argument("--freeze-encoder", default=None, type=int,
@@ -239,7 +241,14 @@ def load_data(path, new_data_amount, old_data_amount, old_data_sampling_method, 
     return train_subset, eval_dataset
 
 
-def load_model(model_dir, dropout=None, move_norm=None, move_norm_p=None, label_smoothing=None):
+def load_model(
+    model_dir,
+    dropout=None,
+    move_norm=None,
+    move_norm_p=None,
+    label_smoothing=None,
+    weight_consolidation=None,
+):
     """Load a trained model and override some model properties if specified."""
     model_config = nsp.EncoderDecoderWPointerConfig.from_pretrained(model_dir)
     if dropout is not None:
@@ -250,9 +259,11 @@ def load_model(model_dir, dropout=None, move_norm=None, move_norm_p=None, label_
         model_config.move_norm_p = move_norm_p
     if label_smoothing is not None:
         model_config.label_smoothing = label_smoothing
+    if weight_consolidation is not None:
+        model_config.weight_consolidation = weight_consolidation
 
     model = nsp.EncoderDecoderWPointerModel.from_pretrained(model_dir, config=model_config)
-    model.reset_move_norm()
+    model.reset_initial_params()
     return model
 
 
@@ -454,7 +465,12 @@ def main(args):
 
     logger.info("Loading model")
     model = load_model(
-        args.model_dir, args.dropout, args.move_norm, args.move_norm_p, args.label_smoothing
+        model_dir=args.model_dir,
+        dropout=args.dropout,
+        move_norm=args.move_norm,
+        move_norm_p=args.move_norm_p,
+        label_smoothing=args.label_smoothing,
+        weight_consolidation=args.weight_consolidation,
     )
 
     logger.info("Preparing for training")
