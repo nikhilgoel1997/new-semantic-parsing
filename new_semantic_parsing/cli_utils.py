@@ -243,7 +243,7 @@ def iterative_prediction(
     return predictions_ids, predictions_str
 
 
-def get_outliers(pretrain_metrics, final_metrics, filter_by_name=None):
+def get_outliers(pretrain_metrics, final_metrics, filter_by_name=None, sigma=1.0):
     """Gets the names of metrics that are worse and better than the initial value with a high probability (0.97)
 
     97% confidence comes from the probability that both metrics will exceed/fall behind their standard deviation
@@ -255,6 +255,8 @@ def get_outliers(pretrain_metrics, final_metrics, filter_by_name=None):
             "stdevs" value is a subdictionary with metric_name + "_std" as keys
         final_metrics: dict with the structure as initial_metrics
         filter_by_name: regex pattern that metric name needs to match
+        sigma: value that controls how far the outliers should be,
+            if zero, any changed value will be an outlier
     """
     negative_outliers, positive_outliers = [], []
 
@@ -266,10 +268,10 @@ def get_outliers(pretrain_metrics, final_metrics, filter_by_name=None):
         final_mean = final_metrics["means"][metric_name]
         final_std = final_metrics["stdevs"][metric_name + "_std"]
 
-        if pretrain_mean - pretrain_std > final_mean + final_std:
+        if pretrain_mean - final_mean > sigma * (pretrain_std + final_std):
             negative_outliers.append(metric_name)
 
-        if pretrain_mean + pretrain_std < final_mean - final_std:
+        if pretrain_mean - final_mean < -sigma * (pretrain_std + final_std):
             positive_outliers.append(metric_name)
 
     return negative_outliers, positive_outliers
@@ -296,7 +298,7 @@ def load_saved_args(path):
     return train_args
 
 
-def evaluate_finetuning_procedure(pretrain_metrics, final_metrics, metric_weights):
+def evaluate_finetuning_procedure(pretrain_metrics, final_metrics, metric_weights, sigma=1.0):
     """Identifies the classes that degraded for sure and improved for sure, compute RI and RD.
 
     RI and RD
@@ -323,7 +325,7 @@ def evaluate_finetuning_procedure(pretrain_metrics, final_metrics, metric_weight
     deltas = get_metrics_delta(pretrain_metrics, final_metrics, metric_pattern)
 
     negative_outliers, positive_outliers = get_outliers(
-        pretrain_metrics, final_metrics, metric_pattern
+        pretrain_metrics, final_metrics, metric_pattern, sigma=sigma,
     )
 
     default_metrics = {
@@ -378,3 +380,38 @@ def get_metrics_delta(pretrain_metrics, final_metrics, filter_by_name=None):
         deltas["delta/" + metric_name] = final_metrics["means"][metric_name] - pretrain_mean
 
     return deltas
+
+
+def average_models(
+    old_model: nsp.EncoderDecoderWPointerModel,
+    new_model: nsp.EncoderDecoderWPointerModel,
+    new_model_weight: float,
+    inplace=False,
+):
+    """Averages new_model and old_model parameters.
+
+    Parameters are averaged with weights new_model_weight and (1 - new_model_weight).
+    If inplace, mutates new_model object.
+    """
+    if not (0 <= new_model_weight <= 1):
+        raise ValueError(
+            f"new_model_weight should be between 0 and 1, got {new_model_weight} instead."
+        )
+    if not inplace:
+        new_model_tmp = nsp.EncoderDecoderWPointerModel(new_model.config)
+        new_model_tmp.load_state_dict(new_model.state_dict())
+        new_model = new_model_tmp
+
+    old_named_params = old_model.state_dict()
+    new_named_params = new_model.state_dict()
+
+    if old_named_params.keys() != new_named_params.keys():
+        raise RuntimeError("Model should have the same parameters")
+
+    for name, old_param in old_named_params.items():
+        new_named_params[name] = (
+            new_model_weight * new_named_params[name] + (1 - new_model_weight) * old_param
+        )
+
+    new_model.load_state_dict(new_named_params, strict=True)
+    return new_model

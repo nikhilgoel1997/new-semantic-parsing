@@ -466,3 +466,155 @@ class EncoderDecoderWPointerTest(unittest.TestCase):
 
             self.assertTrue(torch.allclose(p2, p3), msg=f"test is not deterministic")
             self.assertFalse(torch.allclose(p1, p2), msg=n1)
+
+    def test_update_grad_squared(self):
+        src_vocab_size = 23
+        tgt_vocab_size = 17
+
+        model = EncoderDecoderWPointerModel.from_parameters(
+            layers=1,
+            hidden=32,
+            heads=2,
+            src_vocab_size=src_vocab_size,
+            tgt_vocab_size=tgt_vocab_size,
+            max_src_len=7,
+            dropout=0,
+            move_norm=100,
+            track_grad_square=True,
+        )
+
+        bs, src_len, tgt_len = 3, 5, 7
+        x_enc = torch.randint(0, src_vocab_size, size=(bs, src_len))
+        x_dec = torch.randint(0, tgt_vocab_size, size=(bs, tgt_len))
+
+        dec_inp = x_dec[:, :-1].contiguous()
+        labels = x_dec[:, 1:].contiguous()
+
+        out = model(input_ids=x_enc, decoder_input_ids=dec_inp, labels=labels)
+
+        loss = out[0]
+
+        grad_squared = deepcopy(model.grad_squared)
+        assert grad_squared is not None
+
+        model._update_grad_squared(loss)
+
+        n_changed = 0
+
+        for name, grad2 in grad_squared.items():
+            if not torch.allclose(model.grad_squared[name], grad2):
+                n_changed += 1
+
+        self.assertGreater(n_changed, 40)
+
+    def test_register_weight_consolidation_buffer(self):
+        src_vocab_size = 23
+        tgt_vocab_size = 17
+
+        model = EncoderDecoderWPointerModel.from_parameters(
+            layers=1,
+            hidden=32,
+            heads=2,
+            src_vocab_size=src_vocab_size,
+            tgt_vocab_size=tgt_vocab_size,
+            max_src_len=7,
+            dropout=0,
+            track_grad_square=True,
+        )
+
+        bs, src_len, tgt_len = 3, 5, 7
+        x_enc = torch.randint(0, src_vocab_size, size=(bs, src_len))
+        x_dec = torch.randint(0, tgt_vocab_size, size=(bs, tgt_len))
+
+        dec_inp = x_dec[:, :-1].contiguous()
+        labels = x_dec[:, 1:].contiguous()
+
+        _ = model(input_ids=x_enc, decoder_input_ids=dec_inp, labels=labels)
+
+        model.register_weight_consolidation_buffer()
+
+        self.assertIsNotNone(model.omega)
+        self.assertFalse(
+            torch.all(
+                torch.isinf(model.omega["encoder.encoder.layer.0.attention.self.value.weight"])
+            )
+        )
+
+        for name, omega in model.omega.items():
+            self.assertTrue(torch.all(omega >= 0))
+
+        state_dict = model.state_dict()
+        self.assertTrue(
+            torch.all(state_dict["omega_encoder_encoder_layer_0_attention_self_value_weight"] != 0)
+        )
+
+    def test_get_weight_consolidation(self):
+        src_vocab_size = 23
+        tgt_vocab_size = 17
+
+        model = EncoderDecoderWPointerModel.from_parameters(
+            layers=1,
+            hidden=32,
+            heads=2,
+            src_vocab_size=src_vocab_size,
+            tgt_vocab_size=tgt_vocab_size,
+            max_src_len=7,
+            dropout=0,
+            track_grad_square=True,
+        )
+
+        bs, src_len, tgt_len = 3, 5, 7
+        x_enc = torch.randint(0, src_vocab_size, size=(bs, src_len))
+        x_dec = torch.randint(0, tgt_vocab_size, size=(bs, tgt_len))
+
+        dec_inp = x_dec[:, :-1].contiguous()
+        labels = x_dec[:, 1:].contiguous()
+
+        optimizer = torch.optim.Adam(model.parameters())
+
+        for _ in range(3):
+            optimizer.zero_grad()
+
+            out = model(input_ids=x_enc, decoder_input_ids=dec_inp, labels=labels)
+            loss = out[0]
+
+            loss.backward()
+            optimizer.step()
+
+        model.register_weight_consolidation_buffer()
+
+        state_dict = model.state_dict()
+
+        new_model = EncoderDecoderWPointerModel.from_parameters(
+            layers=1,
+            hidden=32,
+            heads=2,
+            src_vocab_size=src_vocab_size,
+            tgt_vocab_size=tgt_vocab_size,
+            max_src_len=7,
+            dropout=0,
+            weight_consolidation=100,
+        )
+
+        new_model.load_state_dict(state_dict)
+
+        reg = new_model._get_weight_consolidation()
+
+        # before finetuning reg is 0
+        self.assertIsNotNone(reg)
+        self.assertFalse(torch.isinf(reg))
+        self.assertTrue(reg == 0)
+
+        optimizer = torch.optim.Adam(new_model.parameters())
+
+        for _ in range(3):
+            optimizer.zero_grad()
+
+            out = new_model(input_ids=x_enc, decoder_input_ids=dec_inp, labels=labels)
+            loss = out[0]
+
+            loss.backward()
+            optimizer.step()
+
+        reg = new_model._get_weight_consolidation()
+        self.assertTrue(reg > 0)

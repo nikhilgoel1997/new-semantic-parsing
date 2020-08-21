@@ -561,3 +561,139 @@ class TestPreprocessCLI(unittest.TestCase):
         args = retrain_simple.set_default_args(args)
 
         retrain_simple.main(args)
+
+    @unittest.skipUnless(data_exists, skip_msg)
+    def test16_retrain_simple_average(self):
+        shutil.rmtree(OUTPUT_DIR, ignore_errors=True)
+
+        args = [
+            "--data-dir",
+            DATA_BIN,
+            "--output-dir",
+            OUTPUT_DIR,
+            "--model-dir",
+            MODEL_DIR,
+            "--tags",
+            "CLI_tests",
+            "--lr",
+            "0.3",
+            "--epochs",
+            "1",
+            "--log-every",
+            "10",
+            "--new-classes",
+            "IN:GET_LOCATION,IN:GET_LOCATION_HOME,SL:POINT_ON_MAP,SL:CATEGORY_LOCATION",
+            "--batch-size",
+            "16",
+            "--no-lr-scheduler",
+            "--average-checkpoints",
+        ]
+
+        args = retrain.parse_args(args)
+        retrain_simple.check_args(args)
+        args = retrain_simple.set_default_args(args)
+
+        retrain_simple.main(args)
+
+    @unittest.skipUnless(data_exists, skip_msg)
+    def test16_retrain_average(self):
+        shutil.rmtree(OUTPUT_DIR, ignore_errors=True)
+
+        args = [
+            "--data-dir",
+            DATA_BIN,
+            "--output-dir",
+            OUTPUT_DIR,
+            "--model-dir",
+            MODEL_DIR,
+            "--tags",
+            "CLI_tests",
+            "--lr",
+            "0.3",
+            "--epochs",
+            "5",
+            "--log-every",
+            "10",
+            "--new-classes",
+            "IN:GET_LOCATION,IN:GET_LOCATION_HOME,SL:POINT_ON_MAP,SL:CATEGORY_LOCATION",
+            "--batch-size",
+            "16",
+            "--no-lr-scheduler",
+            "--average-checkpoints",
+            "--new-model-weight",
+            "1",
+        ]
+
+        args = retrain.parse_args(args)
+        retrain.main(args)
+
+    @unittest.skipUnless(data_exists, skip_msg)
+    def test17_train_weight_consolidation(self):
+        shutil.rmtree(MODEL_DIR, ignore_errors=True)
+
+        args = [
+            "--data-dir",
+            DATA_BIN,
+            "--output-dir",
+            MODEL_DIR,
+            "--layers",
+            "1",
+            "--hidden",
+            "16",
+            "--heads",
+            "2",
+            "--epochs",
+            f"{EPOCHS}",
+            "--early-stopping",
+            "6",
+            "--decoder-lr",
+            "0.1",
+            "--encoder-lr",
+            "0.01",
+            "--dropout",
+            "0",
+            "--log-every",
+            "10",
+            "--tags",
+            "CLI_tests",
+            "--eval-data-amount",
+            "1.0",
+            "--split-amount-finetune",
+            "0.314",
+            "--min-epochs",
+            "1",
+            "--track-grad-square",
+        ]
+
+        args = train_lightning.parse_args(args)
+        train_lightning.main(args)
+
+    @unittest.skipUnless(data_exists, skip_msg)
+    def test18_retrain_weight_consolidation(self):
+        shutil.rmtree(OUTPUT_DIR, ignore_errors=True)
+
+        args = [
+            "--data-dir",
+            DATA_BIN,
+            "--output-dir",
+            OUTPUT_DIR,
+            "--model-dir",
+            MODEL_DIR,
+            "--tags",
+            "CLI_tests",
+            "--lr",
+            "0.3",
+            "--epochs",
+            "5",
+            "--log-every",
+            "10",
+            "--new-classes",
+            "IN:GET_LOCATION,IN:GET_LOCATION_HOME,SL:POINT_ON_MAP,SL:CATEGORY_LOCATION",
+            "--batch-size",
+            "16",
+            "--weight-consolidation",
+            "0.1",
+        ]
+
+        args = retrain.parse_args(args)
+        retrain.main(args)

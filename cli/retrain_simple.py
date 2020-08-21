@@ -114,7 +114,12 @@ def main(args):
 
     logger.info("Loading model")
     model = cli_retrain.load_model(
-        args.model_dir, args.dropout, args.move_norm, args.move_norm_p, args.label_smoothing
+        model_dir=args.model_dir,
+        dropout=args.dropout,
+        move_norm=args.move_norm,
+        move_norm_p=args.move_norm_p,
+        label_smoothing=args.label_smoothing,
+        weight_consolidation=args.weight_consolidation,
     )
 
     logger.info("Preparing for training")
@@ -151,8 +156,14 @@ def main(args):
         toml.dump(args_dict, f)
 
     logger.info("Training finished!")
+    best_model_checkpoint = trainer.checkpoint_callback.last_checkpoint_path
+    if args.average_checkpoints:
+        cli_retrain.average_checkpoints(
+            model, args, save_to=os.path.dirname(best_model_checkpoint)
+        )
+
     final_metrics, description = cli_utils.evaluate_model(
-        trainer.checkpoint_callback.last_checkpoint_path,
+        best_model_checkpoint,
         schema_tokenizer,
         eval_dataset,
         prefix="eval",

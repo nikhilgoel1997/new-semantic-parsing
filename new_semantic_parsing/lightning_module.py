@@ -246,6 +246,12 @@ class PointerModule(LightningModule):
                 k: p.to(device) for k, p in self.model.initial_params.items()
             }
 
+        if self.model.grad_squared is not None:
+            self.model.grad_squared = {n: p.to(device) for n, p in self.model.grad_squared.items()}
+
+        if self.model.omega is not None:
+            self.model.omega = {n: p.to(device) for n, p in self.model.omega.items()}
+
         return super(PointerModule, self).cuda(device)
 
     @staticmethod

@@ -79,6 +79,8 @@ def parse_args(args=None):
                         help="Amount of old data (train_set) to train on, only values from {0, 1} are supported")
     parser.add_argument("--old-data-sampling-method", default="merge_subset",
                         help="how to sample from old data")
+    parser.add_argument("--average-checkpoints", default=False, action="store_true")
+    parser.add_argument("--new-model-weight", default=0.5, type=float)
 
     # model
     parser.add_argument("--model-dir", required=True,
@@ -120,6 +122,8 @@ def parse_args(args=None):
                         help="Initialize optimizer state randomly instead of loading it from the trainer checkpoint")
     parser.add_argument("--no-lr-scheduler", default=False, action="store_true",
                         help="Keep learning rate constant instead of scheduling it. Only works with retrain_simple.")
+    parser.add_argument("--weight-consolidation", default=None, type=float,
+                        help="Weight consolidation regularization strength.")
 
     # --- freezing
     parser.add_argument("--freeze-encoder", default=None, type=int,
@@ -158,7 +162,7 @@ def parse_args(args=None):
         args.encoder_lr = args.lr
         args.decoder_lr = args.lr
 
-    if args.lr is None:
+    if args.lr is None and args.encoder_lr is not None:
         args.lr = {"encoder_lr": args.encoder_lr, "decoder_lr": args.decoder_lr}
 
     args.wandb_project = args.wandb_project or "new_semantic_parsing"
@@ -237,7 +241,14 @@ def load_data(path, new_data_amount, old_data_amount, old_data_sampling_method, 
     return train_subset, eval_dataset
 
 
-def load_model(model_dir, dropout=None, move_norm=None, move_norm_p=None, label_smoothing=None):
+def load_model(
+    model_dir,
+    dropout=None,
+    move_norm=None,
+    move_norm_p=None,
+    label_smoothing=None,
+    weight_consolidation=None,
+):
     """Load a trained model and override some model properties if specified."""
     model_config = nsp.EncoderDecoderWPointerConfig.from_pretrained(model_dir)
     if dropout is not None:
@@ -248,9 +259,11 @@ def load_model(model_dir, dropout=None, move_norm=None, move_norm_p=None, label_
         model_config.move_norm_p = move_norm_p
     if label_smoothing is not None:
         model_config.label_smoothing = label_smoothing
+    if weight_consolidation is not None:
+        model_config.weight_consolidation = weight_consolidation
 
     model = nsp.EncoderDecoderWPointerModel.from_pretrained(model_dir, config=model_config)
-    model.reset_move_norm()
+    model.reset_initial_params()
     return model
 
 
@@ -409,6 +422,16 @@ def load_lightning_module(
     return lightning_module
 
 
+def average_checkpoints(new_model, args, save_to):
+    old_model = load_model(
+        args.model_dir, args.dropout, args.move_norm, args.move_norm_p, args.label_smoothing
+    )
+    new_model = cli_utils.average_models(
+        old_model=old_model, new_model=new_model, new_model_weight=args.new_model_weight,
+    )
+    new_model.save_pretrained(save_to)
+
+
 def main(args):
     utils.set_seed(args.seed)
 
@@ -442,7 +465,12 @@ def main(args):
 
     logger.info("Loading model")
     model = load_model(
-        args.model_dir, args.dropout, args.move_norm, args.move_norm_p, args.label_smoothing
+        model_dir=args.model_dir,
+        dropout=args.dropout,
+        move_norm=args.move_norm,
+        move_norm_p=args.move_norm_p,
+        label_smoothing=args.label_smoothing,
+        weight_consolidation=args.weight_consolidation,
     )
 
     logger.info("Preparing for training")
@@ -499,8 +527,13 @@ def main(args):
         toml.dump(args_dict, f)
 
     logger.info("Training finished!")
+
+    best_model_checkpoint = trainer.checkpoint_callback.last_checkpoint_path
+    if args.average_checkpoints:
+        average_checkpoints(model, args, save_to=os.path.dirname(best_model_checkpoint))
+
     final_metrics, description = cli_utils.evaluate_model(
-        trainer.checkpoint_callback.last_checkpoint_path,
+        best_model_checkpoint,
         schema_tokenizer,
         eval_dataset,
         prefix="eval",
@@ -518,6 +551,13 @@ def main(args):
         pretrain_metrics, final_metrics, class_weights
     )
     wandb_logger.log_metrics(finetuning_metrics)
+
+    # Compute RI and RD with very small outliers stuff
+    finetuning_metrics0 = cli_utils.evaluate_finetuning_procedure(
+        pretrain_metrics, final_metrics, class_weights, sigma=0.1
+    )
+    finetuning_metrics0 = {k + "_0.1": v for k, v in finetuning_metrics0.items()}
+    wandb_logger.log_metrics(finetuning_metrics0)
 
     wandb_logger.close()
 

@@ -96,7 +96,7 @@ def parse_args(args=None):
     parser.add_argument("--max-steps", default=None, type=int)
     parser.add_argument("--min-steps", default=None, type=int)
     parser.add_argument("--early-stopping", default=None, type=int,
-                        help="Lightning-only. Early stopping patience. No early stopping by default.")
+                        help="Early stopping patience. No early stopping by default.")
 
     parser.add_argument("--seed", default=1, type=int)
     parser.add_argument("--lr", type=float)
@@ -113,6 +113,8 @@ def parse_args(args=None):
     parser.add_argument("--batch-size", default=64, type=int)
     parser.add_argument("--max-grad-norm", default=1.0, type=float)
     parser.add_argument("--label-smoothing", default=0.1, type=float)
+    parser.add_argument("--track-grad-square", default=False, action="store_true",
+                        help="Required if you want to tune this model with weight consolidation.")
 
     # --- freezing
     parser.add_argument("--freeze-encoder", default=None, type=int,
@@ -248,6 +250,9 @@ def make_lightning_module(
 
     freezing_schedule = nsp.dataclasses.EncDecFreezingSchedule.from_args(args)
 
+    # only used in retrain_simple.py
+    no_lr_scheduler = getattr(args, "no_lr_scheduler", False)
+
     lightning_module = nsp.PointerModule(
         model=model,
         schema_tokenizer=schema_tokenizer,
@@ -261,7 +266,7 @@ def make_lightning_module(
         monitor_classes=args.new_classes,
         freezing_schedule=freezing_schedule,
         max_tgt_len=max_tgt_len,
-        no_lr_scheduler=args.no_lr_scheduler,
+        no_lr_scheduler=no_lr_scheduler,
     )
 
     wandb_logger.watch(lightning_module, log="all", log_freq=args.log_every)
@@ -364,6 +369,9 @@ def main(args):
     cli_utils.check_config(lightning_module, trainer, args)
 
     trainer.fit(lightning_module)
+
+    if args.track_grad_square:
+        lightning_module.model.register_weight_consolidation_buffer()
 
     logger.info("Training finished!")
 

@@ -14,7 +14,8 @@
 # limitations under the License.
 # =============================================================================
 """Encoder-decoder with pointer model as in arxiv.org/abs/2001.11458"""
-
+import sys
+import logging
 from copy import deepcopy
 
 import torch
@@ -27,6 +28,14 @@ from new_semantic_parsing.configuration_encoder_decoder_wpointer import (
     EncoderDecoderWPointerConfig,
 )
 from new_semantic_parsing.loss import LabelSmoothedCrossEntropy
+
+logging.basicConfig(
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    level=logging.INFO,
+    stream=sys.stdout,
+)
+logger = logging.getLogger(__name__)
 
 
 class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
@@ -122,17 +131,42 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
                 eps=self.config.label_smoothing
             )
 
+        self.omega = None
+        if self.config.weight_consolidation or self.config.track_grad_square:
+            self._register_weight_consolidation_buffer_empty()
+
+        self.grad_squared = None
+        if self.config.track_grad_square:
+            # used for weight consolidation during training (not during finetuning)
+            self.grad_squared = {n: torch.zeros_like(p) for n, p in self.named_parameters()}
+
+        # used for weight consolidation and move norm during both training and finetuning
         self.initial_params = None
-        if self.config.move_norm is not None:
-            self.reset_move_norm()  # set initial_params
+        if (
+            self.config.move_norm is not None
+            or self.config.weight_consolidation is not None
+            or self.config.track_grad_square
+        ):
+            self.reset_initial_params()  # set initial_params
 
     def to(self, *args, **kwargs):
-        if hasattr(self, "initial_params") and self.initial_params is not None:
+        if self.initial_params is not None:
             self.initial_params = {
                 n: p.to(*args, **kwargs) for n, p in self.initial_params.items()
             }
 
+        if self.grad_squared is not None:
+            self.grad_squared = {n: p.to(*args, **kwargs) for n, p in self.grad_squared.items()}
+
+        if self.omega is not None:
+            self.omega = {n: p.to(*args, **kwargs) for n, p in self.omega.items()}
+
         return super(EncoderDecoderWPointerModel, self).to(*args, **kwargs)
+
+    def load_state_dict(self, state_dict, strict: bool = ...):
+        super().load_state_dict(state_dict, strict)
+        logger.info("Resetting model initial parameters.")
+        self.reset_initial_params()
 
     def tie_weights(self):
         # for now no weights tying
@@ -241,6 +275,8 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
         decoder_pad_token_id=None,
         dropout=0,
         move_norm=None,
+        track_grad_square=False,
+        weight_consolidation=None,
         model_args=None,
     ):
         """
@@ -290,6 +326,8 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
             model_args=model_args,
             move_norm=move_norm,
             dropout=dropout,
+            track_grad_square=track_grad_square,
+            weight_consolidation=weight_consolidation,
         )
 
     def forward(
@@ -413,6 +451,10 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
             return (combined_logits,) + decoder_outputs + encoder_outputs
 
         loss = self._compute_loss(combined_logits, labels, decoder_attention_mask)
+
+        if self.config.track_grad_square:
+            self._update_grad_squared(loss)
+
         return (loss, combined_logits) + decoder_outputs + encoder_outputs
 
     def _compute_loss(self, input, target, mask):
@@ -430,6 +472,9 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
 
         if self.config.move_norm is not None:
             loss += self.config.move_norm * self.get_move_norm()
+
+        if self.config.weight_consolidation is not None:
+            loss += self.config.weight_consolidation * self._get_weight_consolidation()
 
         return loss
 
@@ -495,5 +540,53 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
         norm /= len(self.initial_params)
         return norm
 
-    def reset_move_norm(self):
+    def reset_initial_params(self):
         self.initial_params = {n: p.detach().clone() for n, p in self.named_parameters()}
+
+    def _update_grad_squared(self, loss: torch.Tensor):
+        if self.grad_squared is None:
+            raise RuntimeError(
+                ".grad_squared is None, but trying to update it. "
+                "To initialize the model with grad_squared specify track_grad_square=True"
+            )
+
+        loss.backward(retain_graph=True)
+        for name, param in self.named_parameters():
+            _grad = param.grad if param.grad is not None else torch.zeros_like(param)
+            self.grad_squared[name] = 0.99 * self.grad_squared[name] + 0.01 * _grad ** 2
+
+        self.zero_grad()
+
+    def _register_weight_consolidation_buffer_empty(self):
+        """Registers buffer self.omega that contains zeros.
+
+        Call this function if you want to load state_dict with weight consolidation buffer omega.
+        """
+        self.omega = dict()
+
+        for name, param in self.named_parameters():
+            self.omega[name] = torch.zeros_like(param)
+            self.register_buffer("omega_" + name.replace(".", "_"), self.omega[name])
+
+    def register_weight_consolidation_buffer(self):
+        """Registers buffer self.omega that contains weight importances.
+
+        Requires track_grad_norm=True.
+        Call this function in the end of training.
+        self.omega = integral(grad^2, time) / (initial params - final params)^2
+        """
+        self.omega = dict()
+
+        for name, param in self.named_parameters():
+            delta = (param - self.initial_params[name]) ** 2
+            self.omega[name] = self.grad_squared[name] / (delta + 1e-7)
+            self.register_buffer("omega_" + name.replace(".", "_"), self.omega[name])
+
+    def _get_weight_consolidation(self):
+        reg = sum(
+            torch.mean(self.omega[name] * (self.initial_params[name] - param) ** 2)
+            for name, param in self.named_parameters()
+            if param.requires_grad
+        )
+        reg /= len(self.omega)
+        return self.config.weight_consolidation * reg
