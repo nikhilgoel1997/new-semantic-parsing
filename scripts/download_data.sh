@@ -23,7 +23,7 @@ curl -JLO http://fb.me/semanticparsingdialog
 unzip semanticparsingdialog  # creates top-dataset-semantic-parsing folder
 cd ..
 
-
+cd data
 git clone --depth=1 --branch=master https://github.com/snipsco/nlu-benchmark snips
 rm -rf ./snips/.git
 
