@@ -60,7 +60,6 @@ def parse_args(args=None):
     parser = argparse.ArgumentParser()
 
     # fmt: off
-
     # data
     parser.add_argument("--data-dir", required=True,
                         help="Path to preprocess.py --save-dir containing tokenizer, "
@@ -72,6 +71,10 @@ def parse_args(args=None):
                              "The final evaluation will use the full dataset.")
     parser.add_argument("--new-classes", default=None,
                         help="names of classes to track")
+    parser.add_argument("--new-classes-weight", default=1.0,
+                        help="Weight the new classes with this parameter during loss computation.")
+    parser.add_argument("--new-examples-weight", default=1.0,
+                        help="Weight new examples with this weight during loss computation.")
 
     parser.add_argument("--new-data-amount", default=1., type=float,
                         help="Amount of new data (finetune_set) to train on, 0 < amount <= 1")
@@ -248,8 +251,12 @@ def load_model(
     move_norm_p=None,
     label_smoothing=None,
     weight_consolidation=None,
+    new_class=None,
+    new_class_weight=None,
 ):
     """Load a trained model and override some model properties if specified."""
+    assert (new_class is not None) ^ (new_class_weight is not None)
+
     model_config = nsp.EncoderDecoderWPointerConfig.from_pretrained(model_dir)
     if dropout is not None:
         model_config.set_dropout(dropout)
@@ -261,6 +268,10 @@ def load_model(
         model_config.label_smoothing = label_smoothing
     if weight_consolidation is not None:
         model_config.weight_consolidation = weight_consolidation
+    if new_class is not None:
+        class_weights = torch.ones(model_config.decoder.vocab_size)
+        class_weights[new_class] = new_class_weight
+        model_config.class_weights = class_weights
 
     model = nsp.EncoderDecoderWPointerModel.from_pretrained(model_dir, config=model_config)
     model.reset_initial_params()
@@ -403,6 +414,7 @@ def load_lightning_module(
         "weight_decay": args.weight_decay,
         "log_every": args.log_every,
         "batch_size": args.batch_size,
+        "new_examples_weight": args.new_examples_weight,
     }
     module_kwargs = {k: v for k, v in module_kwargs.items() if v is not None}
 

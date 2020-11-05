@@ -48,3 +48,35 @@ class LabelSmoothedCrossEntropyTest(unittest.TestCase):
         mask = torch.ones_like(labels)
 
         ce2 = LabelSmoothedCrossEntropy(eps=eps)(preds, labels, mask)
+
+    def test_weighed(self):
+        set_seed(98)
+
+        v_size = 43
+        eps = 0.1
+
+        preds = torch.randn(size=(7, 19, v_size)).view(-1, v_size)
+        labels = torch.randint(43, size=(7, 19)).view(-1)
+        weights = torch.abs(10 * torch.randn(size=(43,)))
+        mask = torch.ones_like(labels)
+
+        ce1 = LabelSmoothedCrossEntropy(eps=eps, weights=weights)(preds, labels, mask)
+        # total loss should not depend on weights
+        ce2 = LabelSmoothedCrossEntropy(eps=eps)(preds, labels, mask)
+        self.assertTrue(torch.abs(ce2 - ce1) < 0.05)
+
+    def test_weighed_uniformly(self):
+        set_seed(98)
+
+        v_size = 43
+        eps = 0.1
+
+        preds = torch.randn(size=(7, 19, v_size)).view(-1, v_size)
+        labels = torch.randint(43, size=(7, 19)).view(-1)
+        weights = torch.ones(size=(43,))
+        mask = torch.ones_like(labels)
+
+        ce1 = LabelSmoothedCrossEntropy(eps=eps, weights=weights)(preds, labels, mask)
+        # total loss should not depend on weights
+        ce2 = LabelSmoothedCrossEntropy(eps=eps)(preds, labels, mask)
+        self.assertTrue(torch.allclose(ce2, ce1))

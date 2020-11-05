@@ -67,6 +67,7 @@ class PointerModule(LightningModule):
         max_tgt_len=68,
         no_lr_scheduler=False,
         freezing_schedule: EncDecFreezingSchedule = None,
+        new_examples_weight=None,
     ):
         super().__init__()
         self.model = model
