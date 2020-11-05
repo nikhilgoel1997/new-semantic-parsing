@@ -169,7 +169,7 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
         self.reset_initial_params()
 
     def tie_weights(self):
-        # for now no weights tying
+        # no weights tying
         pass
 
     def get_encoder(self):
@@ -247,7 +247,10 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
         self.config.decoder.vocab_size = self.output_vocab_size + src_seq_len
 
         generated = super().generate(
-            input_ids=input_ids, pointer_mask=pointer_mask, bos_token_id=bos_token_id, **kwargs,
+            input_ids=input_ids,
+            pointer_mask=pointer_mask,
+            bos_token_id=bos_token_id,
+            **kwargs,
         )
 
         self.config.decoder.vocab_size = self._actual_vocab_size
@@ -370,18 +373,12 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
                 decoder outputs,
                 encoder outputs,
         """
-        kwargs_encoder = {
-            argument: value
-            for argument, value in kwargs.items()
-            if not argument.startswith("decoder_")
-        }
+        # fmt: off
+        kwargs_encoder = {k: v for k, v in kwargs.items() if not k.startswith("decoder_")}
+        kwargs_decoder = {k[len("decoder_"):]: v for k, v in kwargs.items() if k.startswith("decoder_")}
+        # fmt: on
 
-        kwargs_decoder = {
-            argument[len("decoder_") :]: value
-            for argument, value in kwargs.items()
-            if argument.startswith("decoder_")
-        }
-
+        # Encode
         if encoder_outputs is None:
             encoder_outputs = self.encoder(
                 input_ids=input_ids,
@@ -392,9 +389,9 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
             )
 
         encoder_hidden_states = encoder_outputs[0]
-
         assert encoder_hidden_states.shape[-1] == self.encoder.config.hidden_size
 
+        # Project encoder representations into decoder-sized dimension
         if self.enc_dec_proj is not None:
             encoder_hidden_states = self.enc_dec_proj(encoder_hidden_states)
 
@@ -413,12 +410,12 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
         assert (
             decoder_hidden_states.shape[-1] == self.decoder.config.hidden_size
         ), "decoder has classification head"
-        # compute pointer scores via attending from decoder hiddens to encoder hiddens
 
+        # compute pointer scores via attending from decoder hiddens to encoder hiddens
         query = self.decoder_q_proj(decoder_hidden_states)  # (bs, tgt_len, decoder_hidden)
         keys = encoder_hidden_states  # (bs, src_len, decoder_hidden)
 
-        # NOTE: this implementaion is computationally inefficient during inference
+        # NOTE: this implementation is computationally inefficient during inference
         attention_scores = query @ keys.transpose(1, 2)  # (bs, tgt_len, src_len)
         attention_scores = F.dropout(
             attention_scores, p=self.config.dropout, training=self.training
@@ -452,9 +449,6 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
 
         loss = self._compute_loss(combined_logits, labels, decoder_attention_mask)
 
-        if self.config.track_grad_square:
-            self._update_grad_squared(loss)
-
         return (loss, combined_logits) + decoder_outputs + encoder_outputs
 
     def _compute_loss(self, input, target, mask):
@@ -465,7 +459,9 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
 
         if self.label_smoothing_loss_layer is None:
             loss = F.cross_entropy(
-                input, target, ignore_index=self.decoder.embeddings.word_embeddings.padding_idx,
+                input,
+                target,
+                ignore_index=self.decoder.embeddings.word_embeddings.padding_idx,
             )
         else:
             loss = self.label_smoothing_loss_layer(input, target, mask)
@@ -543,14 +539,27 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
     def reset_initial_params(self):
         self.initial_params = {n: p.detach().clone() for n, p in self.named_parameters()}
 
-    def _update_grad_squared(self, loss: torch.Tensor):
+    def update_grad_squared(self):
+        """
+        Updates grad_squared buffer, should be called between .backward() and .zero_grad().
+
+        Used to update gradient moving average during training,
+        for example in lightning_module.on_after_backward.
+
+            grad_squared = 0.99 * grad_squared + 0.01 * grad^2
+
+        This trick allows to efficiently estimate grad norms during training instead of
+        forwarding full dataset in the end.
+        """
+        if next(self.parameters()).grad is None:
+            raise RuntimeError("You should .backward before calling .update_grad_squared")
+
         if self.grad_squared is None:
             raise RuntimeError(
                 ".grad_squared is None, but trying to update it. "
                 "To initialize the model with grad_squared specify track_grad_square=True"
             )
 
-        loss.backward(retain_graph=True)
         for name, param in self.named_parameters():
             _grad = param.grad if param.grad is not None else torch.zeros_like(param)
             self.grad_squared[name] = 0.99 * self.grad_squared[name] + 0.01 * _grad ** 2
@@ -571,15 +580,15 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
     def register_weight_consolidation_buffer(self):
         """Registers buffer self.omega that contains weight importances.
 
-        Requires track_grad_norm=True.
-        Call this function in the end of training.
-        self.omega = integral(grad^2, time) / (initial params - final params)^2
+        Requires track_grad_norm=True. Call this function in the end of training.
+
+        self.omega = integral(grad^2, time) * (final params - initial params)^2
         """
         self.omega = dict()
 
         for name, param in self.named_parameters():
             delta = (param - self.initial_params[name]) ** 2
-            self.omega[name] = self.grad_squared[name] / (delta + 1e-7)
+            self.omega[name] = self.grad_squared[name] * delta
             self.register_buffer("omega_" + name.replace(".", "_"), self.omega[name])
 
     def _get_weight_consolidation(self):

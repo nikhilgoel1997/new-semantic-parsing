@@ -427,7 +427,9 @@ def average_checkpoints(new_model, args, save_to):
         args.model_dir, args.dropout, args.move_norm, args.move_norm_p, args.label_smoothing
     )
     new_model = cli_utils.average_models(
-        old_model=old_model, new_model=new_model, new_model_weight=args.new_model_weight,
+        old_model=old_model,
+        new_model=new_model,
+        new_model_weight=args.new_model_weight,
     )
     new_model.save_pretrained(save_to)
 

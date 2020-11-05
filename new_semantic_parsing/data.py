@@ -83,7 +83,8 @@ class PointerDataset(torch.utils.data.Dataset):
 
         if self.target_tensors is None:
             return InputDataClass(
-                input_ids=self.source_tensors[item], pointer_mask=source_pointer_mask,
+                input_ids=self.source_tensors[item],
+                pointer_mask=source_pointer_mask,
             )
 
         target_pointer_mask = None

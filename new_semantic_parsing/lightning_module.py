@@ -156,15 +156,24 @@ class PointerModule(LightningModule):
         avg_log["epoch_loss"] = avg_log.pop("loss")
         return {"log": avg_log}
 
+    def on_after_backward(self):
+        ewc = self.model.config.weight_consolidation
+        if ewc is not None and ewc > 0:
+            self.model.update_grad_squared()
+
     def configure_optimizers(self):
         optimizer = opt.get_optimizers(
-            model=self.model, learning_rate=self.lr, weight_decay=self.weight_decay,
+            model=self.model,
+            learning_rate=self.lr,
+            weight_decay=self.weight_decay,
         )
         if self.no_lr_scheduler:
             return optimizer
 
         scheduler = opt.get_noam_schedule(
-            optimizer, self.warmup_steps, self.model.decoder.config.hidden_size,
+            optimizer,
+            self.warmup_steps,
+            self.model.decoder.config.hidden_size,
         )
 
         # to call scheduler every step instead of every epoch

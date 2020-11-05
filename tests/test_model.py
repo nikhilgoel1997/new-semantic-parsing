@@ -221,7 +221,10 @@ class EncoderDecoderWPointerTest(unittest.TestCase):
         mask = torch.FloatTensor([[0, 1, 1, 1, 0, 0, 0], [0, 1, 1, 1, 1, 1, 0]])
 
         loss = model(
-            input_ids=src_seq, decoder_input_ids=tgt_seq, pointer_mask=mask, labels=tgt_seq,
+            input_ids=src_seq,
+            decoder_input_ids=tgt_seq,
+            pointer_mask=mask,
+            labels=tgt_seq,
         )[0]
 
         self.assertEqual(loss.shape, torch.Size([]))
@@ -493,11 +496,12 @@ class EncoderDecoderWPointerTest(unittest.TestCase):
         out = model(input_ids=x_enc, decoder_input_ids=dec_inp, labels=labels)
 
         loss = out[0]
+        loss.backward()
 
         grad_squared = deepcopy(model.grad_squared)
         assert grad_squared is not None
 
-        model._update_grad_squared(loss)
+        model.update_grad_squared()
 
         n_changed = 0
 
@@ -529,8 +533,15 @@ class EncoderDecoderWPointerTest(unittest.TestCase):
         dec_inp = x_dec[:, :-1].contiguous()
         labels = x_dec[:, 1:].contiguous()
 
-        _ = model(input_ids=x_enc, decoder_input_ids=dec_inp, labels=labels)
+        optimizer = torch.optim.SGD(model.parameters(), lr=1e-3)
 
+        out = model(input_ids=x_enc, decoder_input_ids=dec_inp, labels=labels)
+        loss = out[0]
+
+        loss.backward()
+        optimizer.step()
+
+        model.update_grad_squared()
         model.register_weight_consolidation_buffer()
 
         self.assertIsNotNone(model.omega)
@@ -580,6 +591,8 @@ class EncoderDecoderWPointerTest(unittest.TestCase):
 
             loss.backward()
             optimizer.step()
+
+            model.update_grad_squared()
 
         model.register_weight_consolidation_buffer()
 

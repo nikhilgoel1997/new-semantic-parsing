@@ -325,7 +325,10 @@ def evaluate_finetuning_procedure(pretrain_metrics, final_metrics, metric_weight
     deltas = get_metrics_delta(pretrain_metrics, final_metrics, metric_pattern)
 
     negative_outliers, positive_outliers = get_outliers(
-        pretrain_metrics, final_metrics, metric_pattern, sigma=sigma,
+        pretrain_metrics,
+        final_metrics,
+        metric_pattern,
+        sigma=sigma,
     )
 
     default_metrics = {
