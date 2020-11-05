@@ -37,7 +37,12 @@ class LabelSmoothedCrossEntropy(nn.Module):
         log_probs = F.log_softmax(preds, dim=-1)
 
         one_hot = torch.zeros_like(preds).scatter(1, target.view(-1, 1), 1)
-        one_hot = (1 - self.eps) * one_hot + self.eps / preds.size(-1) * one_hot
+        smoothing = self.eps / (preds.size(-1) - 1)
+
+        # main class = 1.0 - eps - 1/(num-classes - 1) + 1/(num-classes - 1) = 1.0 - eps
+        # other classes = 1/(num-classes - 1)
+        # total sum = 1
+        one_hot = (1 - self.eps - smoothing) * one_hot + smoothing
 
         loss = -(one_hot * log_probs).sum(dim=-1)
         loss *= mask
