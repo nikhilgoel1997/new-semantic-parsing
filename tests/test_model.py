@@ -548,13 +548,12 @@ class EncoderDecoderWPointerTest(unittest.TestCase):
         _gs = model.smoothed_grad_squared["encoder.encoder.layer.0.attention.self.value.weight"]
         self.assertFalse(torch.all(torch.isinf(_gs)))
 
-        for name, omega in model.smoothed_grad_squared.items():
-            self.assertTrue(torch.all(omega >= 0))
+        for name, gs in model.smoothed_grad_squared.items():
+            self.assertTrue(torch.all(gs >= 0))
 
         state_dict = model.state_dict()
-        self.assertTrue(
-            torch.all(state_dict["omega_encoder_encoder_layer_0_attention_self_value_weight"] != 0)
-        )
+        _gs = state_dict["smoothed_grad_squared_encoder_encoder_layer_0_attention_self_value_weight"]
+        self.assertTrue(torch.all(_gs != 0))
 
     def test_get_weight_consolidation(self):
         src_vocab_size = 23
