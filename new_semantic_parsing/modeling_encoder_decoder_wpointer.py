@@ -131,7 +131,7 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
                 eps=self.config.label_smoothing
             )
 
-        self.omega = None
+        self.smoothed_grad_squared = None
         if self.config.weight_consolidation or self.config.track_grad_square:
             self._register_weight_consolidation_buffer_empty()
 
@@ -158,8 +158,10 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
         if self.grad_squared is not None:
             self.grad_squared = {n: p.to(*args, **kwargs) for n, p in self.grad_squared.items()}
 
-        if self.omega is not None:
-            self.omega = {n: p.to(*args, **kwargs) for n, p in self.omega.items()}
+        if self.smoothed_grad_squared is not None:
+            self.smoothed_grad_squared = {
+                n: p.to(*args, **kwargs) for n, p in self.smoothed_grad_squared.items()
+            }
 
         return super(EncoderDecoderWPointerModel, self).to(*args, **kwargs)
 
@@ -567,35 +569,39 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
         self.zero_grad()
 
     def _register_weight_consolidation_buffer_empty(self):
-        """Registers buffer self.omega that contains zeros.
+        """Registers buffer self.smoothed_grad_squared that contains zeros.
 
-        Call this function if you want to load state_dict with weight consolidation buffer omega.
+        Call this function if you want to load state_dict with weight consolidation buffer smoothed_grad_squared.
         """
-        self.omega = dict()
+        self.smoothed_grad_squared = dict()
 
         for name, param in self.named_parameters():
-            self.omega[name] = torch.zeros_like(param)
-            self.register_buffer("omega_" + name.replace(".", "_"), self.omega[name])
+            self.smoothed_grad_squared[name] = torch.zeros_like(param)
+            self.register_buffer(
+                "smoothed_grad_squared_" + name.replace(".", "_"), self.smoothed_grad_squared[name]
+            )
 
     def register_weight_consolidation_buffer(self):
-        """Registers buffer self.omega that contains weight importances.
+        """Registers buffer self.smoothed_grad_squared that contains weight importances.
 
         Requires track_grad_norm=True. Call this function in the end of training.
 
-        self.omega = integral(grad^2, time) * (final params - initial params)^2
+        self.smoothed_grad_squared = integral(grad^2, time) * (final params - initial params)^2
         """
-        self.omega = dict()
+        self.smoothed_grad_squared = dict()
 
         for name, param in self.named_parameters():
             delta = (param - self.initial_params[name]) ** 2
-            self.omega[name] = self.grad_squared[name] * delta
-            self.register_buffer("omega_" + name.replace(".", "_"), self.omega[name])
+            self.smoothed_grad_squared[name] = self.grad_squared[name] * delta
+            self.register_buffer(
+                "smoothed_grad_squared_" + name.replace(".", "_"), self.smoothed_grad_squared[name]
+            )
 
     def _get_weight_consolidation(self):
         reg = sum(
-            torch.mean(self.omega[name] * (self.initial_params[name] - param) ** 2)
+            torch.mean(self.smoothed_grad_squared[name] * (self.initial_params[name] - param) ** 2)
             for name, param in self.named_parameters()
             if param.requires_grad
         )
-        reg /= len(self.omega)
+        reg /= len(self.smoothed_grad_squared)
         return self.config.weight_consolidation * reg

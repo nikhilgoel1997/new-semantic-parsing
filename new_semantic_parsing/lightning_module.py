@@ -107,15 +107,18 @@ class PointerModule(LightningModule):
         if self.freezing_schedule is not None:
             self._freezer_step()
 
+        # if not logging, return loss
         if self.log_every == 0 or (self.global_step % self.log_every != 0):
             return {"loss": loss, "log": {"loss": loss}}
 
+        # if logging, compute metrics
         logits = outputs[1]
         preds = logits.max(-1).indices
 
         labels = batch["labels"]
         label_masks = batch["decoder_attention_mask"]
 
+        # accuracy, EM and first intent precision
         stop_token_ids = [self.schema_tokenizer.eos_token_id, self.schema_tokenizer.pad_token_id]
         batch_metrics = metrics.compute_metrics_from_batch(
             preds, labels, label_masks, stop_token_ids
@@ -258,8 +261,10 @@ class PointerModule(LightningModule):
         if self.model.grad_squared is not None:
             self.model.grad_squared = {n: p.to(device) for n, p in self.model.grad_squared.items()}
 
-        if self.model.omega is not None:
-            self.model.omega = {n: p.to(device) for n, p in self.model.omega.items()}
+        if self.model.smoothed_grad_squared is not None:
+            self.model.smoothed_grad_squared = {
+                n: p.to(device) for n, p in self.model.smoothed_grad_squared.items()
+            }
 
         return super(PointerModule, self).cuda(device)
 
