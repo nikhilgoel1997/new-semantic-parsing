@@ -23,6 +23,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import transformers
+import wandb
 
 from new_semantic_parsing.configuration_encoder_decoder_wpointer import (
     EncoderDecoderWPointerConfig,
@@ -450,7 +451,9 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
             loss += self.config.move_norm * self.get_move_norm()
 
         if self.config.weight_consolidation is not None:
-            loss += self.config.weight_consolidation * self._get_weight_consolidation()
+            ewc_reg = self._get_weight_consolidation()
+            wandb.log({"ewc_reg": ewc_reg})
+            loss += self.config.weight_consolidation * ewc_reg
 
         return loss
 
