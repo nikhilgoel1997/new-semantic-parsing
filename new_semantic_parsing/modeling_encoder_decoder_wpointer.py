@@ -531,8 +531,11 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
         This trick allows to efficiently estimate grad norms during training instead of
         forwarding full dataset in the end.
         """
-        if next(self.parameters()).grad is None:
-            raise RuntimeError("You should .backward before calling .update_grad_squared")
+        _n, _p = next(self.named_parameters())
+        if _p.grad is None:
+            raise RuntimeError("You should .backward before calling .update_grad_squared. "
+                               f"Parameter {_n} has None gradient. "
+                               f"Other parameters: {[p.grad for p in self.parameters()]}.")
 
         if self._grad_squared_buffer_names is None:
             raise RuntimeError(
