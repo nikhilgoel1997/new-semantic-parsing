@@ -531,11 +531,6 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
         This trick allows to efficiently estimate grad norms during training instead of
         forwarding full dataset in the end.
         """
-        _n, _p = next(self.named_parameters())
-        if _p.grad is None:
-            raise RuntimeError("You should .backward before calling .update_grad_squared. "
-                               f"Parameter {_n} has None gradient. "
-                               f"Other parameters: {[p.grad for p in self.parameters()]}.")
 
         if self._grad_squared_buffer_names is None:
             raise RuntimeError(
@@ -543,19 +538,25 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
                 "To initialize the model with grad_squared specify track_grad_square=True"
             )
 
+        has_grad = False
         for name, param in self.named_parameters():
-            _grad = param.grad if param.grad is not None else torch.zeros_like(param)
+            if param.grad is None:
+                continue
+
+            has_grad = True
             buffer_name = self._grad_buffer_name(name)
 
             # read current squared grad value from the buffer
             _old_grad2 = getattr(self, buffer_name)
-            _new_grad = 0.99 * _old_grad2 + 0.01 * _grad ** 2 / batch_size
+            _new_grad = 0.99 * _old_grad2 + 0.01 * param.grad ** 2 / batch_size
 
             # write updated value to the buffer
             # e.g. self.grad_squared_my_param = _new_grad
             setattr(self, buffer_name, _new_grad)
 
-        self.zero_grad()
+        if not has_grad:
+            raise RuntimeError("You should .backward before calling .update_grad_squared. "
+                               "All parameters currently have None gradient.")
 
     def _register_grad_squared_buffers(self):
         """Registers buffers to keep track for squares of gradients initialized as zeroes.
