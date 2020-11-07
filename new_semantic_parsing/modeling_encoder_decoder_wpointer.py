@@ -74,26 +74,19 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
                 model_args=model_args,
                 **kwargs,
             )
-        assert isinstance(config, self.config_class), "config: {} has to be of type {}".format(
-            config, self.config_class
-        )
+
+        if not isinstance(config, self.config_class):
+            raise ValueError(f"config: {config} has to be of the type {self.config_class}")
+
         super().__init__(config)
 
-        if encoder is None:
-            encoder = transformers.AutoModel.from_config(config.encoder)
-
-        if decoder is None:
-            decoder = transformers.AutoModel.from_config(config.decoder)
-
-        self.encoder = encoder
-        self.decoder = decoder
+        self.encoder = encoder or transformers.AutoModel.from_config(config.encoder)
+        self.decoder = decoder or transformers.AutoModel.from_config(config.decoder)
 
         if self.encoder.get_output_embeddings() is not None:
             raise RuntimeError(
-                "The encoder {} should not have an LM Head. Please use a model without LM Head"
+                "The encoder should not have an LM Head. Please use a model without LM Head"
             )
-
-        self.max_src_len = self.config.max_src_len
 
         self.enc_dec_proj = None
         if self.encoder.config.hidden_size != self.decoder.config.hidden_size:
@@ -111,11 +104,6 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
         # from config only .hidden_size, .hidden_act, .layer_norm_eps and .vocab_size are used
         self.lm_head = transformers.modeling_bert.BertLMPredictionHead(head_config)
 
-        # One does not simply ties weights of embeddings with different vocabularies
-        # # lm_head.decoder is just a linear layer
-        # self._tie_or_clone_weights(self.lm_head.decoder,
-        #                            self.decoder.get_input_embeddings())
-
         self.decoder_q_proj = nn.Linear(
             self.decoder.config.hidden_size,
             self.decoder.config.hidden_size,
@@ -131,36 +119,26 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
                 eps=self.config.label_smoothing
             )
 
-        self.smoothed_grad_squared = None
-        if self.config.weight_consolidation or self.config.track_grad_square:
-            self._register_weight_consolidation_buffer_empty()
+        # fine-tuning specific regularizations
+        use_ewc = self.config.track_grad_square or self.config.weight_consolidation
 
-        self.grad_squared = None
-        if self.config.track_grad_square:
-            # used for weight consolidation during training (not during finetuning)
-            self.grad_squared = {n: torch.zeros_like(p) for n, p in self.named_parameters()}
+        if self.config.weight_consolidation:
+            logger.info("Fine-tuning ewc-ready model, setting config.track_grad_square=False")
+            self.config.track_grad_square = False
+
+        self._grad_squared_buffer_names = None
+        if use_ewc:
+            self._grad_squared_buffer_names = self._register_grad_squared_buffers()
 
         # used for weight consolidation and move norm during both training and finetuning
         self.initial_params = None
-        if (
-            self.config.move_norm is not None
-            or self.config.weight_consolidation is not None
-            or self.config.track_grad_square
-        ):
+        if use_ewc or self.config.move_norm is not None:
             self.reset_initial_params()  # set initial_params
 
     def to(self, *args, **kwargs):
         if self.initial_params is not None:
             self.initial_params = {
                 n: p.to(*args, **kwargs) for n, p in self.initial_params.items()
-            }
-
-        if self.grad_squared is not None:
-            self.grad_squared = {n: p.to(*args, **kwargs) for n, p in self.grad_squared.items()}
-
-        if self.smoothed_grad_squared is not None:
-            self.smoothed_grad_squared = {
-                n: p.to(*args, **kwargs) for n, p in self.smoothed_grad_squared.items()
             }
 
         return super(EncoderDecoderWPointerModel, self).to(*args, **kwargs)
@@ -541,14 +519,14 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
     def reset_initial_params(self):
         self.initial_params = {n: p.detach().clone() for n, p in self.named_parameters()}
 
-    def update_grad_squared(self):
+    def update_grad_squared(self, batch_size=1):
         """
         Updates grad_squared buffer, should be called between .backward() and .zero_grad().
 
         Used to update gradient moving average during training,
         for example in lightning_module.on_after_backward.
 
-            grad_squared = 0.99 * grad_squared + 0.01 * grad^2
+            grad_squared = 0.99 * grad_squared + 0.01 * grad^2 / batch_size
 
         This trick allows to efficiently estimate grad norms during training instead of
         forwarding full dataset in the end.
@@ -556,7 +534,7 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
         if next(self.parameters()).grad is None:
             raise RuntimeError("You should .backward before calling .update_grad_squared")
 
-        if self.grad_squared is None:
+        if self._grad_squared_buffer_names is None:
             raise RuntimeError(
                 ".grad_squared is None, but trying to update it. "
                 "To initialize the model with grad_squared specify track_grad_square=True"
@@ -564,44 +542,55 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
 
         for name, param in self.named_parameters():
             _grad = param.grad if param.grad is not None else torch.zeros_like(param)
-            self.grad_squared[name] = 0.99 * self.grad_squared[name] + 0.01 * _grad ** 2
+            buffer_name = self._grad_buffer_name(name)
+
+            # read current squared grad value from the buffer
+            _old_grad2 = getattr(self, buffer_name)
+            _new_grad = 0.99 * _old_grad2 + 0.01 * _grad ** 2 / batch_size
+
+            # write updated value to the buffer
+            # e.g. self.grad_squared_my_param = _new_grad
+            setattr(self, buffer_name, _new_grad)
 
         self.zero_grad()
 
-    def _register_weight_consolidation_buffer_empty(self):
-        """Registers buffer self.smoothed_grad_squared that contains zeros.
+    def _register_grad_squared_buffers(self):
+        """Registers buffers to keep track for squares of gradients initialized as zeroes.
 
-        Call this function if you want to load state_dict with weight consolidation buffer smoothed_grad_squared.
+        Call this function before training the model if you want to later fine-tune the model with EWC.
+        During training exponential mean of the grad squares is stored in these buffers.
+
+        self.grad_squared_parameter_name = 0.99 * self.grad_squared_parameter_name + 0.01 * parameter.grad ** 2
+
+        Returns:
+            set(str), grad squared buffer names
         """
-        self.smoothed_grad_squared = dict()
+        grad_squared_names = set()
 
         for name, param in self.named_parameters():
-            self.smoothed_grad_squared[name] = torch.zeros_like(param)
-            self.register_buffer(
-                "smoothed_grad_squared_" + name.replace(".", "_"), self.smoothed_grad_squared[name]
-            )
+            buffer_name = self._grad_buffer_name(name)
+            self.register_buffer(buffer_name, torch.zeros_like(param))
+            grad_squared_names.add(buffer_name)
 
-    def register_weight_consolidation_buffer(self):
-        """Registers buffer self.smoothed_grad_squared that contains weight importances.
-
-        Requires track_grad_norm=True. Call this function in the end of training.
-
-        self.smoothed_grad_squared = integral(grad^2, time) * (final params - initial params)^2
-        """
-        self.smoothed_grad_squared = dict()
-
-        for name, param in self.named_parameters():
-            delta = (param - self.initial_params[name]) ** 2
-            self.smoothed_grad_squared[name] = self.grad_squared[name] * delta
-            self.register_buffer(
-                "smoothed_grad_squared_" + name.replace(".", "_"), self.smoothed_grad_squared[name]
-            )
+        return grad_squared_names
 
     def _get_weight_consolidation(self):
-        reg = sum(
-            torch.mean(self.smoothed_grad_squared[name] * (self.initial_params[name] - param) ** 2)
-            for name, param in self.named_parameters()
-            if param.requires_grad
-        )
-        reg /= len(self.smoothed_grad_squared)
-        return self.config.weight_consolidation * reg
+
+        reg = 0
+        n_params = 0
+        for n, p in self.named_parameters():
+            if not p.requires_grad:
+                continue
+
+            grad_squared = getattr(self, self._grad_buffer_name(n))
+            delta = self.initial_params[n] - p
+            reg += torch.sum(grad_squared * delta ** 2)
+            n_params += p.numel()
+
+        reg /= n_params
+
+        return reg
+
+    @staticmethod
+    def _grad_buffer_name(param_name):
+        return "grad_squared_" + param_name.replace(".", "_")

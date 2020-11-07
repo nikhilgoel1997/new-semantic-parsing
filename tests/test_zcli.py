@@ -688,7 +688,7 @@ class TestPreprocessCLI(unittest.TestCase):
             "--log-every",
             "10",
             "--new-classes",
-            "IN:GET_LOCATION,IN:GET_LOCATION_HOME,SL:POINT_ON_MAP,SL:CATEGORY_LOCATION",
+            "IN:GET_LOCATION",
             "--batch-size",
             "16",
             "--weight-consolidation",

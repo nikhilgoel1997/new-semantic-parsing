@@ -340,7 +340,7 @@ def get_tree_path_scores(pred_tokens, true_tokens, classes=None):
     }
 
 
-def _get_paths_with_values(tree) -> dict:
+def _get_paths_with_values(tree, max_depth=10) -> dict:
     """Goes over the tree and return all slot values with the slot names.
 
     Slot names include paths to this slot. E.g. IN1.SL1: sl1_value.
@@ -348,7 +348,18 @@ def _get_paths_with_values(tree) -> dict:
 
     Args:
         tree: Tree object
+        max_depth: max recursion depth, returns empty dict if max_depth<=0
+
+    Returns:
+        dict(str -> str), maps paths to slot values
+        e.g.
+            node1.node2.node3: value1
     """
+    # check tree for backward branches
+
+    if max_depth <= 0:
+        return {}
+
     is_special = SL in tree.entity or IN in tree.entity
     if not is_special:
         return {}
@@ -363,7 +374,7 @@ def _get_paths_with_values(tree) -> dict:
         paths[tree.entity] = tree.subtrees_to_tokens()
 
     for subtree in tree.subtrees:
-        subpaths = _get_paths_with_values(subtree)
+        subpaths = _get_paths_with_values(subtree, max_depth=max_depth - 1)
         for path, value in subpaths.items():
             paths[tree.entity + "." + path] = value
 

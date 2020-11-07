@@ -370,9 +370,6 @@ def main(args):
 
     trainer.fit(lightning_module)
 
-    if args.track_grad_square:
-        lightning_module.model.register_weight_consolidation_buffer()
-
     logger.info("Training finished!")
 
     # top_k == 1 --> the last checkpoint is the best model

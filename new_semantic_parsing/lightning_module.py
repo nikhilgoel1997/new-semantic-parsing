@@ -160,9 +160,9 @@ class PointerModule(LightningModule):
         return {"log": avg_log}
 
     def on_after_backward(self):
-        ewc = self.model.config.weight_consolidation
+        ewc = self.model.config.track_grad_square
         if ewc is not None and ewc > 0:
-            self.model.update_grad_squared()
+            self.model.update_grad_squared(batch_size=self.batch_size)
 
     def configure_optimizers(self):
         optimizer = opt.get_optimizers(
@@ -255,15 +255,7 @@ class PointerModule(LightningModule):
     def cuda(self, device=None):
         if self.model.config.move_norm is not None:
             self.model.initial_params = {
-                k: p.to(device) for k, p in self.model.initial_params.items()
-            }
-
-        if self.model.grad_squared is not None:
-            self.model.grad_squared = {n: p.to(device) for n, p in self.model.grad_squared.items()}
-
-        if self.model.smoothed_grad_squared is not None:
-            self.model.smoothed_grad_squared = {
-                n: p.to(device) for n, p in self.model.smoothed_grad_squared.items()
+                k: p.cuda(device) for k, p in self.model.initial_params.items()
             }
 
         return super(PointerModule, self).cuda(device)
