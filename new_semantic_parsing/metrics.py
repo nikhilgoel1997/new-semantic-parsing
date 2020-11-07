@@ -125,9 +125,14 @@ class Tree:
         subtrees = []
         slot_value_tokens = []
 
+        safety = 1000
         i = 3
         inside_slot = inside_slot or entity_type == SL
         while i < len(tokens):
+            if safety <= 0:
+                raise RuntimeError("The sequence is too long (>1000 tokens) or "
+                                   "there is a bug in the tree building function.")
+            safety -= 1
             token = tokens[i]
 
             # ignore non-slot values
