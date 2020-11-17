@@ -25,6 +25,7 @@ import torch.nn.functional as F
 import transformers
 import wandb
 
+from new_semantic_parsing.buffers import ParamsBufferHolder
 from new_semantic_parsing.configuration_encoder_decoder_wpointer import (
     EncoderDecoderWPointerConfig,
 )
@@ -127,27 +128,23 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
             logger.info("Fine-tuning ewc-ready model, setting config.track_grad_square=False")
             self.config.track_grad_square = False
 
-        self._grad_squared_buffer_names = None
+        self.grad_squared = None
         if use_ewc:
-            self._grad_squared_buffer_names = self._register_grad_squared_buffers()
+            self.reset_grad_squared()
 
         # used for weight consolidation and move norm during both training and finetuning
         self.initial_params = None
         if use_ewc or self.config.move_norm is not None:
             self.reset_initial_params()  # set initial_params
 
-    def to(self, *args, **kwargs):
-        if self.initial_params is not None:
-            self.initial_params = {
-                n: p.to(*args, **kwargs) for n, p in self.initial_params.items()
-            }
-
-        return super(EncoderDecoderWPointerModel, self).to(*args, **kwargs)
-
     def load_state_dict(self, state_dict, strict: bool = ...):
+        # NOTE: not sure if we need this function
         super().load_state_dict(state_dict, strict)
-        logger.info("Resetting model initial parameters.")
-        self.reset_initial_params()
+
+        use_ewc = self.config.track_grad_square or self.config.weight_consolidation
+        if use_ewc or self.config.move_norm is not None:
+            logger.info("Resetting model initial parameters.")
+            self.reset_initial_params()
 
     def tie_weights(self):
         # no weights tying
@@ -452,7 +449,10 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
 
         if self.config.weight_consolidation is not None:
             ewc_reg = self._get_weight_consolidation()
-            wandb.log({"ewc_reg": ewc_reg})
+
+            if wandb.run is not None:
+                wandb.log({"ewc_reg": ewc_reg})
+
             loss += self.config.weight_consolidation * ewc_reg
 
         return loss
@@ -511,16 +511,26 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
 
     def get_move_norm(self):
         norm = 0
+        count = 0
 
         for n, p1 in self.named_parameters():
             p2 = self.initial_params[n]
             norm += torch.dist(p1, p2, p=self.config.move_norm_p)
+            count += 1
 
-        norm /= len(self.initial_params)
+        norm /= count
         return norm
 
     def reset_initial_params(self):
-        self.initial_params = {n: p.detach().clone() for n, p in self.named_parameters()}
+        self.initial_params = ParamsBufferHolder(self.named_parameters())
+
+    def reset_grad_squared(self):
+        """Creates buffers holder to keep track for squares of gradients initialized as zeroes.
+
+        Call this function before training the model if you want to later fine-tune the model with EWC.
+        During training exponential mean of the grad squares is stored in these buffers.
+        """
+        self.grad_squared = ParamsBufferHolder({n: torch.zeros_like(p) for n, p in self.named_parameters()})
 
     def update_grad_squared(self, batch_size=1):
         """
@@ -535,7 +545,7 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
         forwarding full dataset in the end.
         """
 
-        if self._grad_squared_buffer_names is None:
+        if self.grad_squared is None:
             raise RuntimeError(
                 ".grad_squared is None, but trying to update it. "
                 "To initialize the model with grad_squared specify track_grad_square=True"
@@ -545,41 +555,18 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
         for name, param in self.named_parameters():
             if param.grad is None:
                 continue
-
             has_grad = True
-            buffer_name = self._grad_buffer_name(name)
 
             # read current squared grad value from the buffer
-            _old_grad2 = getattr(self, buffer_name)
+            _old_grad2 = self.grad_squared[name]
             _new_grad = 0.99 * _old_grad2 + 0.01 * param.grad ** 2 / batch_size
 
             # write updated value to the buffer
-            # e.g. self.grad_squared_my_param = _new_grad
-            setattr(self, buffer_name, _new_grad)
+            self.grad_squared.set(name, _new_grad)
 
         if not has_grad:
             raise RuntimeError("You should .backward before calling .update_grad_squared. "
                                "All parameters currently have None gradient.")
-
-    def _register_grad_squared_buffers(self):
-        """Registers buffers to keep track for squares of gradients initialized as zeroes.
-
-        Call this function before training the model if you want to later fine-tune the model with EWC.
-        During training exponential mean of the grad squares is stored in these buffers.
-
-        self.grad_squared_parameter_name = 0.99 * self.grad_squared_parameter_name + 0.01 * parameter.grad ** 2
-
-        Returns:
-            set(str), grad squared buffer names
-        """
-        grad_squared_names = set()
-
-        for name, param in self.named_parameters():
-            buffer_name = self._grad_buffer_name(name)
-            self.register_buffer(buffer_name, torch.zeros_like(param))
-            grad_squared_names.add(buffer_name)
-
-        return grad_squared_names
 
     def _get_weight_consolidation(self):
 
@@ -589,15 +576,13 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
             if not p.requires_grad:
                 continue
 
-            grad_squared = getattr(self, self._grad_buffer_name(n))
-            delta = self.initial_params[n] - p
+            grad_squared = self.grad_squared[n]
+            initial_p = self.initial_params[n]
+
+            delta = initial_p - p
             reg += torch.sum(grad_squared * delta ** 2)
             n_params += p.numel()
 
         reg /= n_params
 
         return reg
-
-    @staticmethod
-    def _grad_buffer_name(param_name):
-        return "grad_squared_" + param_name.replace(".", "_")

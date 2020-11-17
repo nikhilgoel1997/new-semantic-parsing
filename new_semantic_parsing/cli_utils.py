@@ -240,6 +240,8 @@ def iterative_prediction(
             )
             predictions_str.append(prediction_str)
 
+        logger.info(f"Generation example: \n{predictions_str[0]}")
+
     return predictions_ids, predictions_str
 
 
@@ -409,7 +411,7 @@ def average_models(
     new_named_params = new_model.state_dict()
 
     if old_named_params.keys() != new_named_params.keys():
-        raise RuntimeError("Model should have the same parameters")
+        raise RuntimeError("Models should have the same parameters")
 
     for name, old_param in old_named_params.items():
         new_named_params[name] = (

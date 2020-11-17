@@ -498,14 +498,14 @@ class EncoderDecoderWPointerTest(unittest.TestCase):
         loss = out[0]
         loss.backward()
 
-        grad_squared = {n: deepcopy(getattr(model, n)) for n in model._grad_squared_buffer_names}
+        grad_squared = {n: deepcopy(p) for n, p in model.grad_squared.items()}
 
         model.update_grad_squared()
 
         n_changed = 0
 
         for name, grad2 in grad_squared.items():
-            updated_gs = getattr(model, name)
+            updated_gs = model.grad_squared[name]
             if not torch.allclose(updated_gs, grad2):
                 n_changed += 1
 
@@ -543,12 +543,12 @@ class EncoderDecoderWPointerTest(unittest.TestCase):
 
         model.update_grad_squared()
 
-        self.assertIsNotNone(model._grad_squared_buffer_names)
-        _gs = model.grad_squared_encoder_encoder_layer_0_attention_self_value_weight
+        self.assertIsNotNone(model.grad_squared)
+        _gs = model.grad_squared["encoder.encoder_layer.0.attention.self.value.weight"]
         self.assertFalse(torch.all(torch.isinf(_gs)))
 
         state_dict = model.state_dict()
-        _gs = state_dict["grad_squared_encoder_encoder_layer_0_attention_self_value_weight"]
+        _gs = state_dict["grad_squared.encoder_encoder_layer_0_attention_self_value_weight"]
         self.assertTrue(torch.all(_gs != 0))
 
     def test_get_weight_consolidation(self):
