@@ -17,35 +17,39 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn.modules.loss import _WeightedLoss
 
 
-class LabelSmoothedCrossEntropy(nn.Module):
-    def __init__(self, eps=0.1):
-        super().__init__()
-        self.eps = eps
+# source: https://stackoverflow.com/questions/55681502/label-smoothing-in-pytorch
+class LabelSmoothedCrossEntropy(_WeightedLoss):
+    def __init__(self, weight=None, eps=0.0):
+        super().__init__(weight=weight)
+        self.smoothing = eps
+        self.weight = weight
 
-    def forward(self, preds, target, mask):
-        """
-        :param preds: torch.FloatTensor of shape (batch_size, seq_len, vocab_size)
-        :param target: torch.LongTensor of shape (batch_size, seq_len)
-        :param mask: torch.FloatTensor with 0 at masked tokens
-        :return:
-        """
+    @staticmethod
+    def _smooth_one_hot(targets: torch.Tensor, n_classes: int, smoothing=0.0):
+        assert 0 <= smoothing < 1
+        with torch.no_grad():
+            targets = (
+                torch.empty(size=(targets.size(0), n_classes), device=targets.device)
+                .fill_(smoothing / (n_classes - 1))
+                .scatter_(1, targets.data.unsqueeze(1), 1.0 - smoothing)
+            )
+        return targets
+
+    def forward(self, inputs, targets, mask):
         if mask is None:
-            mask = torch.ones_like(target)
+            mask = torch.ones_like(targets)
 
-        log_probs = F.log_softmax(preds, dim=-1)
+        targets = self._smooth_one_hot(targets, inputs.size(-1), self.smoothing)
+        lsm = F.log_softmax(inputs, dim=-1)
 
-        one_hot = torch.zeros_like(preds).scatter(1, target.view(-1, 1), 1)
-        smoothing = self.eps / (preds.size(-1) - 1)
+        if self.weight is not None:
+            lsm = lsm * self.weight.unsqueeze(0)
 
-        # main class = 1.0 - eps - 1/(num-classes - 1) + 1/(num-classes - 1) = 1.0 - eps
-        # other classes = 1/(num-classes - 1)
-        # total sum = 1
-        one_hot = (1 - self.eps - smoothing) * one_hot + smoothing
-
-        loss = -(one_hot * log_probs).sum(dim=-1)
+        loss = -(targets * lsm).sum(-1)
         loss *= mask
-        loss = loss.sum() / torch.sum(mask)  # divide by the total number of tokens
+        loss = loss.sum() / mask.sum()
 
         return loss

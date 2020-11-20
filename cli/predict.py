@@ -28,7 +28,7 @@ import torch
 import transformers
 import pandas as pd
 
-from new_semantic_parsing import cli_utils
+from new_semantic_parsing import cli_utils, config
 from new_semantic_parsing import EncoderDecoderWPointerModel, TopSchemaTokenizer
 from new_semantic_parsing.data import (
     make_dataset,
@@ -103,7 +103,7 @@ if __name__ == "__main__":
         dataset,
         batch_size=args.batch_size,
         collate_fn=Seq2SeqDataCollator(pad_id=text_tokenizer.pad_token_id).collate_batch,
-        num_workers=8,
+        num_workers=config.NUM_WORKERS,
     )
 
     logger.info(f"Maximum source text length {dataset.get_max_len()[0]}")

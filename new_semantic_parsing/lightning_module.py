@@ -22,7 +22,7 @@ from torch.utils.data import DataLoader
 from pytorch_lightning import LightningModule
 
 import new_semantic_parsing.optimization as opt
-from new_semantic_parsing import metrics, data
+from new_semantic_parsing import metrics, data, config
 from new_semantic_parsing.dataclasses import EncDecFreezingSchedule
 from new_semantic_parsing.modeling_encoder_decoder_wpointer import EncoderDecoderWPointerModel
 from new_semantic_parsing.schema_tokenizer import TopSchemaTokenizer
@@ -187,7 +187,7 @@ class PointerModule(LightningModule):
         loader = DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
-            num_workers=8,
+            num_workers=config.NUM_WORKERS,
             pin_memory=True,
             shuffle=True,
             collate_fn=self._collator.collate_batch,
@@ -216,7 +216,7 @@ class PointerModule(LightningModule):
         loader = DataLoader(
             valid_dataset,
             batch_size=self.batch_size,
-            num_workers=8,
+            num_workers=config.NUM_WORKERS,
             pin_memory=True,
             collate_fn=self._collator.collate_batch,
             shuffle=False,
@@ -232,7 +232,7 @@ class PointerModule(LightningModule):
         loader = DataLoader(
             self.test_dataset,
             batch_size=self.batch_size,
-            num_workers=8,
+            num_workers=config.NUM_WORKERS,
             pin_memory=True,
             collate_fn=self._collator.collate_batch,
         )
