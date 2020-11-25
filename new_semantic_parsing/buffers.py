@@ -55,6 +55,9 @@ class ParamsBufferHolder(nn.Module):
     def __len__(self):
         return len(self._buffer_names)
 
+    def __repr__(self):
+        return f"ParamBufferHolder with parameters {self._param_names}"
+
     def items(self):
         for n in self._param_names:
             yield n, self.get(n)

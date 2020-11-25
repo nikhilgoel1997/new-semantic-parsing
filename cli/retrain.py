@@ -215,13 +215,13 @@ def load_tokenizer(model_dir, data_dir):
 
 def load_data(path, new_data_amount, old_data_amount, old_data_sampling_method, wandb_logger):
     datasets = torch.load(path)
-    train_dataset: nsp.PointerDataset = datasets["finetune_dataset"]
-    if train_dataset is None:
+    finetune_dataset: nsp.PointerDataset = datasets["finetune_dataset"]
+    if finetune_dataset is None:
         raise RuntimeError("Datafile provided does not contain finetune_dataset.")
 
     eval_dataset: nsp.PointerDataset = datasets["valid_dataset"]
 
-    train_subset = train_dataset
+    train_subset = finetune_dataset
     if new_data_amount is not None and new_data_amount < 1.0:
         train_subset = utils.make_subset(train_subset, new_data_amount)
 

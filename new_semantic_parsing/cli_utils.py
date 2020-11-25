@@ -27,6 +27,7 @@ import new_semantic_parsing.metrics
 import new_semantic_parsing.utils
 from cli.retrain import logger
 
+from new_semantic_parsing import config
 
 def evaluate_model(
     checkpoint_path,
@@ -214,6 +215,7 @@ def iterative_prediction(
     predictions_str = []
     text_tokenizer = schema_tokenizer.src_tokenizer
 
+    assert dataloader.num_workers == config.NUM_WORKERS
     for batch in tqdm(dataloader, desc="generation"):
         prediction_batch: torch.LongTensor = model.generate(
             input_ids=batch["input_ids"].to(device),

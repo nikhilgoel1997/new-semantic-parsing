@@ -583,6 +583,4 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
             reg += torch.sum(grad_squared * delta ** 2)
             n_params += p.numel()
 
-        reg /= n_params
-
         return reg
