@@ -569,7 +569,7 @@ class EncoderDecoderWPointerModel(transformers.PreTrainedModel):
                                "All parameters currently have None gradient.")
 
     def _get_weight_consolidation(self):
-
+        """Computes Sum(old_grad^2 * (old_params - current_params)^2)"""
         reg = 0
         n_params = 0
         for n, p in self.named_parameters():
