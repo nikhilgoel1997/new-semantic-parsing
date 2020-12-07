@@ -3,7 +3,7 @@ cd ..
 
 
 SET_NAME=organizer_95
-DATE=Dec2
+DATE=Dec7
 CLASSES=SL:ORGANIZER_EVENT
 
 DATA=data-bin/"$SET_NAME"_"$DATE"
