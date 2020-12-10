@@ -477,6 +477,7 @@ def main(args):
 
     logger.info("Preparing for training")
 
+    # NOTE: load_lightning_module loads a different checkpoint, we probably need to deal with that
     lightning_module = load_lightning_module(
         checkpoint_path=train_args["pl_checkpoint_path"],
         model=model,
@@ -486,6 +487,7 @@ def main(args):
         args=args,
         wandb_logger=wandb_logger,
     )
+    model.reset_initial_params()
 
     # override some of the parameters saved in the Trainer
     checkpoint_path = modify_checkpoint_for_retraining(
