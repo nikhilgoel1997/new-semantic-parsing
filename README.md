@@ -29,6 +29,15 @@ sh scripts/download_data.sh
 
 Preprocess script splits train set into pretrain and finetune parts, creates tokenizers, numericalizes the data and saves in to `--output-dir` folder.
 
+Convert the input data to the format that the model will use using the convert script. Add data in sanju_data.tsv as in the format in the file.
+
+```bash
+# convert data
+
+python convert_data.py
+```
+
+
 ```bash
 
 # preprocess
@@ -38,12 +47,12 @@ DATA=data-bin/top_dataset
 python cli/preprocess.py \
   --data data/top-dataset-semantic-parsing \
   --text-tokenizer bert-base-cased \
-  --split-amount 0.9 \
+  --split-amount 0.1 \
   --output-dir $DATA \
 ```
 
 Train script trains the model on the pretrain part and saves the model and the trainer to `--output-dir` folder.
-We recommend the following hyperparameters for training.
+Edit the batch size to reduce overfitting once there is enough data (recommended batch size - 128/192)
 
 ```bash
 # train
@@ -56,7 +65,7 @@ python cli/train_lightning.py \
   --encoder-model bert-base-cased \
   --decoder-lr 0.2 \
   --encoder-lr 0.02 \
-  --batch-size 192 \
+  --batch-size 4 \
   --layers 4 \
   --hidden 256 \
   --dropout 0.2 \
@@ -70,6 +79,16 @@ python cli/train_lightning.py \
   --early-stopping 10 \
   --output-dir $MODEL \
 ```
+Use the below script to load the model and type input data and get output data. 
+
+```bash
+# script to test input data with output
+
+python cli/script.py   --data-dir $DATA   --model-dir $MODEL
+
+```
+
+Use the below retrain model when dataset is enough to optimize the model.
 
 Retrain script loads the model and optimizer from the checkpoint and finetunes on the finetune part of the training set.
 
