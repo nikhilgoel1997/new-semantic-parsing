@@ -15,6 +15,7 @@ Edit (-e) mode is perferred if you want to change the code.
 pip install -r requirements.txt
 pip install -e .
 ```
+If you have issues install the requirements for this, install pip3 or conda and run the same txt and . file.
 
 ### Usage
 
@@ -53,6 +54,9 @@ python cli/preprocess.py \
 
 Train script trains the model on the pretrain part and saves the model and the trainer to `--output-dir` folder.
 Edit the batch size to reduce overfitting once there is enough data (recommended batch size - 128/192)
+Also, there can be a wanDB error which will require you to login to wanDB. Steps to login will be given in the error.
+Run in the below command in console and copy the key you will get at wanDB site.
+"" $wandb login ""
 
 ```bash
 # train
