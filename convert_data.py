@@ -70,5 +70,5 @@ def preprocess_data(train_data):
     train_data.to_csv("data/top-dataset-semantic-parsing/eval.tsv", sep = '\t', index = False, header=None)
     return train_data
 
-train_data = pd.read_table('../data/top-dataset-semantic-parsing/sanju_data.tsv', names=['text', 'tokens', 'schema'])
+train_data = pd.read_table('sanju_data.tsv', names=['text', 'tokens', 'schema'])
 preprocess_data(train_data)
