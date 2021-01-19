@@ -352,6 +352,7 @@ def main(args):
         wandb_logger=wandb_logger,
         )
     while(flag != '0'):
+        train_data = pd.read_table('sanju_data.tsv', names=['text', 'tokens', 'schema'])
         data = pd.DataFrame(index=None, columns=names)
         data.loc[0] = train_data.loc[9]
         data.loc[0].text = input("input text: ")
